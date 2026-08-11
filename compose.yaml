@@ -1,0 +1,12 @@
+# Local development database. Spring Boot's Docker Compose support starts this
+# automatically on `./mvnw spring-boot:run` and injects the connection settings.
+# Host port 5434 is fixed so `psql` and GUI clients can connect without guessing.
+services:
+  postgres:
+    image: 'postgres:17'
+    environment:
+      - 'POSTGRES_DB=herald'
+      - 'POSTGRES_USER=herald'
+      - 'POSTGRES_PASSWORD=herald'
+    ports:
+      - '5434:5432'

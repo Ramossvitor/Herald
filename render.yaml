@@ -1,0 +1,23 @@
+# Render Blueprint. The database is external (Neon); only the web service
+# lives here. Secrets are set in the dashboard (sync: false), never in git.
+services:
+  - type: web
+    name: herald
+    runtime: docker
+    plan: free
+    healthCheckPath: /actuator/health
+    autoDeploy: true
+    envVars:
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod
+      # jdbc:postgresql://<neon-host>/<db>?sslmode=require
+      - key: SPRING_DATASOURCE_URL
+        sync: false
+      - key: SPRING_DATASOURCE_USERNAME
+        sync: false
+      - key: SPRING_DATASOURCE_PASSWORD
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: ADMIN_API_KEY
+        sync: false
