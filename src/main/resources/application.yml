@@ -1,0 +1,84 @@
+spring:
+  application:
+    name: herald
+  main:
+    # Startup cost matters more than first-request latency on the free tier this
+    # service targets. Beans that must exist eagerly (schedulers) opt out with
+    # @Lazy(false).
+    lazy-initialization: true
+  jmx:
+    enabled: false
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate # Flyway owns the schema; Hibernate only checks it
+  datasource:
+    hikari:
+      maximum-pool-size: 3
+      connection-timeout: 10000 # serverless Postgres can take a few seconds to wake
+
+server:
+  port: ${PORT:8080}
+  tomcat:
+    threads:
+      max: 16
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: never # /actuator/health is public (uptime pings); details stay private
+
+herald:
+  # Empty admin key disables the /admin/v1/** surface entirely (fail closed).
+  admin-api-key: ${ADMIN_API_KEY:}
+  resend:
+    base-url: https://api.resend.com
+    # Empty key pauses dispatch: messages queue as PENDING until it is set.
+    api-key: ${RESEND_API_KEY:}
+    connect-timeout: 5s
+    read-timeout: 10s
+  outbox:
+    poll-interval: 3s
+    batch-size: 10
+    max-attempts: 8
+    # Resend's free tier allows ~2 requests/second; pace sends well under that.
+    send-interval: 600ms
+
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+logging:
+  structured:
+    format:
+      console: ecs
+
+---
+# Profile for the AOT/CDS training run in the Dockerfile: the context must
+# start and exit without a database or any external service.
+spring:
+  config:
+    activate:
+      on-profile: cds
+  flyway:
+    enabled: false
+  docker:
+    compose:
+      enabled: false
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        boot:
+          allow_jdbc_metadata_access: false
+  datasource:
+    url: jdbc:postgresql://localhost:5432/herald
+    username: herald
+    password: herald
