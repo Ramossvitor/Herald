@@ -1,8 +1,9 @@
 # Herald
 
 Multi-tenant transactional notification service. Reliable email delivery with
-per-tenant API keys, quotas, and a retrying outbox. Web push is on the
-roadmap; the tenant and limit model is already channel-agnostic.
+per-tenant API keys, per-tenant sender identities, quotas, and a retrying
+outbox. Web push is on the roadmap; the tenant, identity and limit model is
+already channel-agnostic.
 
 ## How it works
 
@@ -29,6 +30,12 @@ client app ──POST /v1/emails──▶ quota check (sync) ──▶ outbox ro
   provider idempotency key, so a retry after a crash cannot double-send.
 - **Keys are secrets done properly.** `hrl_live_…` bearer tokens, stored only
   as SHA-256, revocable, issued by an admin-only API guarded by a master key.
+- **Mail goes out under the client's own identity**, not Herald's. Every
+  tenant gets a free verified address on the operator's shared domain
+  (`acme@send.example`, no DNS work at all), and can upgrade to its own
+  domain: Herald registers it with the provider, hands back the DKIM/SPF
+  records to publish, and polls until DNS checks out. A `from` is only
+  accepted if it resolves to an identity that tenant actually verified.
 
 ## API
 
@@ -38,12 +45,17 @@ Interactive documentation lives at `/swagger-ui.html` on a running instance.
 |---|---|---|
 | `POST /v1/emails` | tenant key | Accept an email for delivery |
 | `GET /v1/emails/{id}` | tenant key | Delivery status of a message |
+| `POST /v1/sender-identities` | tenant key | Register a domain; returns the DNS records to publish |
+| `GET /v1/sender-identities` | tenant key | Identities, their status and DNS records |
+| `POST /v1/sender-identities/{id}/verify` | tenant key | Ask the provider to re-check DNS |
+| `DELETE /v1/sender-identities/{id}` | tenant key | Drop an identity |
 | `POST /admin/v1/tenants` | master key | Create a tenant (with email settings) |
 | `GET /admin/v1/tenants` | master key | List tenants |
 | `PUT /admin/v1/tenants/{id}/email-settings` | master key | Update sender/limits |
 | `PUT /admin/v1/tenants/{id}/limit-policies` | master key | Replace per-key caps |
 | `POST /admin/v1/tenants/{id}/api-keys` | master key | Issue a key (plaintext returned once) |
 | `DELETE /admin/v1/api-keys/{id}` | master key | Revoke a key |
+| `…/tenants/{id}/sender-identities…` | master key | The identity lifecycle for any tenant |
 | `GET /actuator/health` | public | Health check / uptime ping target |
 
 ## Running locally
@@ -65,10 +77,10 @@ but dispatch stays paused.
 ```
 
 Unit tests cover the pure decision logic (retry policy, provider response
-classification, address canonicalization, key format). Integration tests run
-against a real Postgres (Testcontainers) and a WireMock provider — including
-concurrent outbox claims and the full quota contract. No test ever talks to
-the real provider.
+classification, address canonicalization, verification backoff, key format).
+Integration tests run against a real Postgres (Testcontainers) and a WireMock
+provider — including concurrent outbox claims, the full quota contract, and
+the domain-verification lifecycle. No test ever talks to the real provider.
 
 ## Configuration
 
@@ -78,6 +90,7 @@ the real provider.
 | `SPRING_DATASOURCE_USERNAME` / `SPRING_DATASOURCE_PASSWORD` | yes | Database credentials |
 | `ADMIN_API_KEY` | no | Master key for `/admin/v1/**`; absent → admin surface disabled |
 | `RESEND_API_KEY` | no | Provider key; absent → dispatch paused, messages queue |
+| `HERALD_SHARED_ROOT_DOMAIN` | no | Operator domain for the free sender tier (`send.example`); absent → tier disabled and tenants need an explicit `fromAddress`. [Setup](docs/operations.md#sender-identities) |
 | `PORT` | no | HTTP port (default 8080) |
 | `SPRING_PROFILES_ACTIVE` | no | `prod` enables structured (ECS JSON) logs |
 
@@ -89,8 +102,8 @@ Tuning knobs (defaults in `application.yml`): `herald.outbox.poll-interval`,
 The `Dockerfile` builds a layered image with a CDS training run for fast cold
 starts on small containers; `render.yaml` describes a free-tier web service
 on Render with the database on Neon. Operational runbook — provisioning
-tenants, rotating keys, handling dead letters — in
-[docs/operations.md](docs/operations.md).
+tenants, setting up the shared sender domain, rotating keys, handling dead
+letters — in [docs/operations.md](docs/operations.md).
 
 ## Roadmap
 
