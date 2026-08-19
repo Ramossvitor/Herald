@@ -38,4 +38,32 @@ public final class EmailAddresses {
 		// making distinct addresses collide — the opposite of the point here.
 		return withoutTag.isEmpty() ? normalized : withoutTag + "@" + domain;
 	}
+
+	/**
+	 * Extracts the addr-spec from either {@code a@b} or {@code Name <a@b>},
+	 * lowercased and trimmed. Returns null when there is no parseable address —
+	 * callers treat that as "not a verified sender", never as a crash.
+	 */
+	public static String addrSpec(String from) {
+		if (from == null) {
+			return null;
+		}
+		String candidate = from.trim();
+		int open = candidate.lastIndexOf('<');
+		int close = candidate.lastIndexOf('>');
+		if (open >= 0 && close > open) {
+			candidate = candidate.substring(open + 1, close).trim();
+		}
+		candidate = candidate.toLowerCase(Locale.ROOT);
+		int at = candidate.lastIndexOf('@');
+		if (at <= 0 || at == candidate.length() - 1 || candidate.contains(" ")) {
+			return null;
+		}
+		return candidate;
+	}
+
+	/** The domain of an addr-spec produced by {@link #addrSpec}. */
+	public static String domainOf(String addrSpec) {
+		return addrSpec == null ? null : addrSpec.substring(addrSpec.lastIndexOf('@') + 1);
+	}
 }

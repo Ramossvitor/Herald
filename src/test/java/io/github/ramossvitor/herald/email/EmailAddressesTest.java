@@ -39,4 +39,20 @@ class EmailAddressesTest {
 		assertThat(EmailAddresses.canonicalize("...@gmail.com")).isEqualTo("...@gmail.com");
 		assertThat(EmailAddresses.canonicalize("+tag@gmail.com")).isEqualTo("+tag@gmail.com");
 	}
+
+	@Test
+	void addrSpecHandlesBareAndDisplayNameForms() {
+		assertThat(EmailAddresses.addrSpec("mail@acme.example")).isEqualTo("mail@acme.example");
+		assertThat(EmailAddresses.addrSpec("Acme <Mail@Acme.example>")).isEqualTo("mail@acme.example");
+		assertThat(EmailAddresses.addrSpec("  spaced@acme.example  ")).isEqualTo("spaced@acme.example");
+		assertThat(EmailAddresses.addrSpec("no-at-sign")).isNull();
+		assertThat(EmailAddresses.addrSpec("Acme <broken@>")).isNull();
+		assertThat(EmailAddresses.addrSpec(null)).isNull();
+	}
+
+	@Test
+	void domainOfTakesEverythingAfterTheLastAt() {
+		assertThat(EmailAddresses.domainOf("mail@acme.example")).isEqualTo("acme.example");
+		assertThat(EmailAddresses.domainOf(null)).isNull();
+	}
 }
