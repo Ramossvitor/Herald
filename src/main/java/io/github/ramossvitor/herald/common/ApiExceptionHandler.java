@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import io.github.ramossvitor.herald.email.QuotaExceededException;
+import io.github.ramossvitor.herald.sender.SenderNotVerifiedException;
 
 /**
  * Every error leaves the API as an RFC 9457 problem document. The {@code type}
@@ -47,6 +48,15 @@ public class ApiExceptionHandler {
 			response.header("Retry-After", String.valueOf(ex.retryAfterSeconds()));
 		}
 		return response.body(problem);
+	}
+
+	@ExceptionHandler(SenderNotVerifiedException.class)
+	public ProblemDetail onSenderNotVerified(SenderNotVerifiedException ex) {
+		ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.UNPROCESSABLE_CONTENT);
+		problem.setType(URI.create("/errors/sender-not-verified"));
+		problem.setTitle("Sender not verified");
+		problem.setProperty("from", ex.from());
+		return problem;
 	}
 
 	@ExceptionHandler(NotFoundException.class)

@@ -129,6 +129,29 @@ class ApiFlowIntegrationTest {
 	}
 
 	@Test
+	void fromOverrideMustBeAVerifiedIdentity() throws Exception {
+		Provisioned tenant = provisionTenant(90, 0);
+
+		// Any address at the operator-trusted domain works.
+		mvc.perform(post("/v1/emails")
+				.header("Authorization", tenant.bearer())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"to\":\"a@example.com\",\"subject\":\"Hello\",\"html\":\"<p>Hi</p>\","
+						+ "\"text\":\"Hi\",\"from\":\"Billing <billing@acme.example>\"}"))
+				.andExpect(status().isAccepted());
+
+		// A domain the tenant never verified is rejected up front.
+		mvc.perform(post("/v1/emails")
+				.header("Authorization", tenant.bearer())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"to\":\"b@example.com\",\"subject\":\"Hello\",\"html\":\"<p>Hi</p>\","
+						+ "\"text\":\"Hi\",\"from\":\"spoof@other.example\"}"))
+				.andExpect(status().is(422))
+				.andExpect(jsonPath("$.type").value("/errors/sender-not-verified"))
+				.andExpect(jsonPath("$.from").value("spoof@other.example"));
+	}
+
+	@Test
 	void malformedBodiesAreRejectedUpFront() throws Exception {
 		Provisioned tenant = provisionTenant(90, 600);
 		mvc.perform(post("/v1/emails")

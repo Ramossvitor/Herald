@@ -54,9 +54,9 @@ public class ResendClient {
 		}
 	}
 
-	public Outcome send(EmailMessage message, String fromAddress) {
+	public Outcome send(EmailMessage message) {
 		Map<String, Object> payload = new LinkedHashMap<>();
-		payload.put("from", fromAddress);
+		payload.put("from", message.getFromAddress());
 		payload.put("to", List.of(message.getRecipient()));
 		payload.put("subject", message.getSubject());
 		payload.put("html", message.getHtmlBody());
