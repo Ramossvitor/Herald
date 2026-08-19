@@ -1,4 +1,4 @@
-package io.github.ramossvitor.herald.email;
+package io.github.ramossvitor.herald.quota;
 
 /**
  * The check order is part of the API contract: when a request trips more than

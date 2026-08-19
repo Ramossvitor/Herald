@@ -1,4 +1,4 @@
-package io.github.ramossvitor.herald.email.outbox;
+package io.github.ramossvitor.herald.outbox;
 
 import java.time.Duration;
 

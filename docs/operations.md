@@ -150,13 +150,15 @@ stopped being valid at the provider — check `sender_identities` for it.
 To retry a dead letter after fixing the cause, requeue it in SQL:
 
 ```sql
-UPDATE email_messages
+UPDATE messages
 SET status = 'PENDING', attempt_count = 0, next_attempt_at = now()
 WHERE id = '<message-id>' AND status = 'FAILED';
 ```
 
-Watch the `herald.emails.failed` counter (`/actuator/metrics`, admin key) —
-it should stay flat in normal operation.
+Watch the `herald.messages.failed` counter (`/actuator/metrics`, admin key),
+tagged by `channel` — it should stay flat in normal operation. Its siblings
+`herald.messages.accepted`, `.sent` and `.rejected` carry the same tag, so a
+problem on one channel is visible without reading the others.
 
 ## Pauses and kill switches
 
@@ -182,6 +184,13 @@ it should stay flat in normal operation.
 - Migrations run automatically at boot (Flyway). Rolling back a deploy whose
   migration already ran requires a manual, compensating migration — prefer
   additive schema changes.
+- V6 (the shared outbox) follows that rule: it copies `email_messages` into
+  `messages` and parks the original as `email_messages_pre_v6`, indexes and
+  all. To roll back to a pre-V6 image before V7 has run, rename the five
+  `idx_*_pre_v6` indexes and the table back, drop `messages`, and delete the V6
+  row from `flyway_schema_history`. V7 drops the parked table and closes that
+  window — hold it back until V6 has survived a deploy.
 - Emergency SQL access is the Neon console's SQL editor; every quota decision
-  is explainable from `email_messages` (`created_at`, `recipient_canonical`,
-  `limit_keys`).
+  is explainable from `messages` (`channel`, `created_at`, `recipient_canonical`,
+  `limit_keys`). Budgets are per channel, so every such query wants a
+  `channel = '...'` alongside the tenant.

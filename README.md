@@ -2,8 +2,9 @@
 
 Multi-tenant transactional notification service. Reliable email delivery with
 per-tenant API keys, per-tenant sender identities, quotas, and a retrying
-outbox. Web push is on the roadmap; the tenant, identity and limit model is
-already channel-agnostic.
+outbox. The outbox is channel-agnostic — claim, retry, recovery and quota are
+shared, and a new channel is a provider plus a payload shape. WhatsApp and web
+push are next.
 
 ## How it works
 
@@ -109,8 +110,17 @@ letters — in [docs/operations.md](docs/operations.md).
 
 ## Roadmap
 
+- WhatsApp channel, bring-your-own: the tenant owns the number, the WhatsApp
+  Business Account and the templates, and Herald dispatches under them. A
+  WhatsApp number carries exactly one display name, so it cannot host several
+  tenants the way one domain hosts several mailboxes — there is no shared tier
+  to offer, and the message bill stays with the tenant.
 - Web push channel (per-tenant VAPID key pair, subscription registry keyed by
   `(tenant, externalUserId)`)
-- SMS / WhatsApp providers
 - Stored templates with per-tenant variables
 - Delivery webhooks
+
+SMS was evaluated and left out: against WhatsApp in Brazil it costs more per
+message, bills the operator rather than the tenant, and couples opt-out across
+tenants on a shared sender ID. Per-tenant sender IDs fix that but cost weeks of
+provisioning and a monthly lease each.

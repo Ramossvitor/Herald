@@ -1,4 +1,4 @@
-package io.github.ramossvitor.herald.email.outbox;
+package io.github.ramossvitor.herald.outbox;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -9,8 +9,7 @@ import java.util.UUID;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import io.github.ramossvitor.herald.email.EmailMessage;
-import io.github.ramossvitor.herald.email.EmailStatus;
+import io.github.ramossvitor.herald.sender.Channel;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 
@@ -34,25 +33,31 @@ public class OutboxStore {
 	 * {@code FOR UPDATE SKIP LOCKED}: concurrent claimers never block on each
 	 * other and never pick the same row. Claimed rows leave as SENDING, so a
 	 * crash before recording leaves evidence for {@link OutboxRecovery}.
+	 *
+	 * Claiming one channel at a time is half of what keeps a stalled provider
+	 * from starving the others: nobody else's batch is filled with rows only it
+	 * can send. The other half is the worker's per-channel batch ceiling, which
+	 * bounds how long one channel can hold the pass.
 	 */
 	@Transactional
-	public List<EmailMessage> claimDueBatch(int batchSize) {
+	public List<Message> claimDueBatch(Channel channel, int batchSize) {
 		@SuppressWarnings("unchecked")
 		List<UUID> ids = entityManager.createNativeQuery("""
-				select id from email_messages
-				where status = 'PENDING' and next_attempt_at <= now()
+				select id from messages
+				where channel = :channel and status = 'PENDING' and next_attempt_at <= now()
 				order by next_attempt_at
 				limit :batchSize
 				for update skip locked
 				""", UUID.class)
+				.setParameter("channel", channel.name())
 				.setParameter("batchSize", batchSize)
 				.getResultList();
 		if (ids.isEmpty()) {
 			return List.of();
 		}
 
-		List<EmailMessage> claimed = entityManager
-				.createQuery("select m from EmailMessage m where m.id in :ids", EmailMessage.class)
+		List<Message> claimed = entityManager
+				.createQuery("select m from Message m where m.id in :ids", Message.class)
 				.setParameter("ids", ids)
 				.getResultList();
 		Instant now = clock.instant();
@@ -62,7 +67,7 @@ public class OutboxStore {
 
 	@Transactional
 	public void recordOutcome(UUID messageId, RetryPolicy.Decision decision, String providerMessageId, String error) {
-		EmailMessage message = entityManager.find(EmailMessage.class, messageId);
+		Message message = entityManager.find(Message.class, messageId);
 		if (message == null) {
 			return;
 		}
@@ -78,18 +83,19 @@ public class OutboxStore {
 
 	/**
 	 * A row stuck in SENDING means a worker died between claim and record. The
-	 * provider idempotency key makes re-sending it safe.
+	 * provider idempotency key makes re-sending it safe. Channel-agnostic on
+	 * purpose: a crash abandons rows on whatever channel was in flight.
 	 */
 	@Transactional
 	public int releaseStuckSending(Duration olderThan) {
 		Instant now = clock.instant();
 		return entityManager.createQuery("""
-				update EmailMessage m
+				update Message m
 				set m.status = :pending, m.nextAttemptAt = :now, m.updatedAt = :now
 				where m.status = :sending and m.updatedAt < :cutoff
 				""")
-				.setParameter("pending", EmailStatus.PENDING)
-				.setParameter("sending", EmailStatus.SENDING)
+				.setParameter("pending", MessageStatus.PENDING)
+				.setParameter("sending", MessageStatus.SENDING)
 				.setParameter("now", now)
 				.setParameter("cutoff", now.minus(olderThan))
 				.executeUpdate();

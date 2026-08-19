@@ -13,7 +13,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-import io.github.ramossvitor.herald.email.QuotaExceededException;
+import io.github.ramossvitor.herald.quota.QuotaExceededException;
 import io.github.ramossvitor.herald.sender.ProviderUnavailableException;
 import io.github.ramossvitor.herald.sender.SenderNotVerifiedException;
 

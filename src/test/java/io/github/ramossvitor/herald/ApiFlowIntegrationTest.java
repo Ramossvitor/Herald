@@ -179,7 +179,7 @@ class ApiFlowIntegrationTest {
 				.andReturn();
 		UUID messageId = UUID.fromString(
 				json.readTree(accepted.getResponse().getContentAsString()).get("id").asText());
-		assertThat(jdbc.queryForObject("select from_address from email_messages where id = ?", String.class,
+		assertThat(jdbc.queryForObject("select sender from messages where id = ?", String.class,
 				messageId)).isEqualTo("\"spoof@other.example\" <billing@acme.example>");
 	}
 
