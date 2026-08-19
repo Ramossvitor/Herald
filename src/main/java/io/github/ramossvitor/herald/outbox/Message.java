@@ -1,12 +1,14 @@
-package io.github.ramossvitor.herald.email;
+package io.github.ramossvitor.herald.outbox;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+import io.github.ramossvitor.herald.sender.Channel;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -14,9 +16,13 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
+/**
+ * One queued delivery, on any channel. The columns are the dispatch loop's
+ * vocabulary; whatever only one channel understands rides in {@link #payload}.
+ */
 @Entity
-@Table(name = "email_messages")
-public class EmailMessage {
+@Table(name = "messages")
+public class Message {
 
 	@Id
 	private UUID id;
@@ -24,30 +30,27 @@ public class EmailMessage {
 	@Column(name = "tenant_id", nullable = false)
 	private UUID tenantId;
 
+	@Enumerated(EnumType.STRING)
+	@Column(nullable = false)
+	private Channel channel;
+
 	@Column(name = "idempotency_key")
 	private String idempotencyKey;
 
 	@Column(nullable = false)
 	private String recipient;
 
+	/** Quota windows count destinations, not spellings. */
 	@Column(name = "recipient_canonical", nullable = false)
 	private String recipientCanonical;
 
 	/** Snapshot: editing tenant settings must not change queued messages. */
-	@Column(name = "from_address", nullable = false)
-	private String fromAddress;
-
 	@Column(nullable = false)
-	private String subject;
+	private String sender;
 
-	@Column(name = "html_body", nullable = false)
-	private String htmlBody;
-
-	@Column(name = "text_body", nullable = false)
-	private String textBody;
-
-	@Column(name = "reply_to")
-	private String replyTo;
+	@JdbcTypeCode(SqlTypes.JSON)
+	@Column(nullable = false, columnDefinition = "jsonb")
+	private Map<String, Object> payload;
 
 	@JdbcTypeCode(SqlTypes.ARRAY)
 	@Column(name = "limit_keys", columnDefinition = "text[]", nullable = false)
@@ -55,7 +58,7 @@ public class EmailMessage {
 
 	@Enumerated(EnumType.STRING)
 	@Column(nullable = false)
-	private EmailStatus status;
+	private MessageStatus status;
 
 	@Column(name = "attempt_count", nullable = false)
 	private int attemptCount;
@@ -78,25 +81,22 @@ public class EmailMessage {
 	@Column(name = "sent_at")
 	private Instant sentAt;
 
-	protected EmailMessage() {
+	protected Message() {
 		// JPA
 	}
 
-	public EmailMessage(UUID tenantId, String idempotencyKey, String recipient, String recipientCanonical,
-			String fromAddress, String subject, String htmlBody, String textBody, String replyTo,
-			List<String> limitKeys, Instant createdAt) {
+	public Message(UUID tenantId, Channel channel, String idempotencyKey, String recipient, String recipientCanonical,
+			String sender, Map<String, Object> payload, List<String> limitKeys, Instant createdAt) {
 		this.id = UUID.randomUUID();
 		this.tenantId = tenantId;
+		this.channel = channel;
 		this.idempotencyKey = idempotencyKey;
 		this.recipient = recipient;
 		this.recipientCanonical = recipientCanonical;
-		this.fromAddress = fromAddress;
-		this.subject = subject;
-		this.htmlBody = htmlBody;
-		this.textBody = textBody;
-		this.replyTo = replyTo;
+		this.sender = sender;
+		this.payload = Map.copyOf(payload);
 		this.limitKeys = List.copyOf(limitKeys);
-		this.status = EmailStatus.PENDING;
+		this.status = MessageStatus.PENDING;
 		this.attemptCount = 0;
 		this.nextAttemptAt = createdAt;
 		this.createdAt = createdAt;
@@ -104,7 +104,7 @@ public class EmailMessage {
 	}
 
 	public void markSending(Instant now) {
-		this.status = EmailStatus.SENDING;
+		this.status = MessageStatus.SENDING;
 		this.updatedAt = now;
 	}
 
@@ -113,7 +113,7 @@ public class EmailMessage {
 	}
 
 	public void recordSuccess(String providerMessageId, Instant now) {
-		this.status = EmailStatus.SENT;
+		this.status = MessageStatus.SENT;
 		this.providerMessageId = providerMessageId;
 		this.lastError = null;
 		this.sentAt = now;
@@ -121,16 +121,22 @@ public class EmailMessage {
 	}
 
 	public void recordFailure(String error, Instant now) {
-		this.status = EmailStatus.FAILED;
+		this.status = MessageStatus.FAILED;
 		this.lastError = error;
 		this.updatedAt = now;
 	}
 
 	public void scheduleRetry(String error, Instant nextAttemptAt, Instant now) {
-		this.status = EmailStatus.PENDING;
+		this.status = MessageStatus.PENDING;
 		this.lastError = error;
 		this.nextAttemptAt = nextAttemptAt;
 		this.updatedAt = now;
+	}
+
+	/** Null when the key is absent or holds something other than a string. */
+	public String payloadText(String key) {
+		Object value = payload.get(key);
+		return value instanceof String text ? text : null;
 	}
 
 	public UUID getId() {
@@ -139,6 +145,10 @@ public class EmailMessage {
 
 	public UUID getTenantId() {
 		return tenantId;
+	}
+
+	public Channel getChannel() {
+		return channel;
 	}
 
 	public String getIdempotencyKey() {
@@ -153,31 +163,15 @@ public class EmailMessage {
 		return recipientCanonical;
 	}
 
-	public String getFromAddress() {
-		return fromAddress;
-	}
-
-	public String getSubject() {
-		return subject;
-	}
-
-	public String getHtmlBody() {
-		return htmlBody;
-	}
-
-	public String getTextBody() {
-		return textBody;
-	}
-
-	public String getReplyTo() {
-		return replyTo;
+	public String getSender() {
+		return sender;
 	}
 
 	public List<String> getLimitKeys() {
 		return limitKeys;
 	}
 
-	public EmailStatus getStatus() {
+	public MessageStatus getStatus() {
 		return status;
 	}
 

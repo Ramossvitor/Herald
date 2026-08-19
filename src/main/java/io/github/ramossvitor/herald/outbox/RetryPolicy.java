@@ -1,10 +1,7 @@
-package io.github.ramossvitor.herald.email.outbox;
+package io.github.ramossvitor.herald.outbox;
 
 import java.time.Duration;
 import java.util.concurrent.ThreadLocalRandom;
-
-import io.github.ramossvitor.herald.email.EmailStatus;
-import io.github.ramossvitor.herald.email.resend.ResendResponseClassifier.Classification;
 
 /**
  * Pure decision table: (classification, attempt number) → next state. Owning
@@ -27,7 +24,7 @@ public final class RetryPolicy {
 	}
 
 	/** {@code delay} is null exactly when {@code status} is terminal. */
-	public record Decision(EmailStatus status, Duration delay) {
+	public record Decision(MessageStatus status, Duration delay) {
 	}
 
 	/**
@@ -36,11 +33,11 @@ public final class RetryPolicy {
 	 */
 	public Decision decide(Classification classification, int attemptNumber, Integer retryAfterSeconds) {
 		return switch (classification) {
-			case SUCCESS -> new Decision(EmailStatus.SENT, null);
-			case REJECTED -> new Decision(EmailStatus.FAILED, null);
+			case SUCCESS -> new Decision(MessageStatus.SENT, null);
+			case REJECTED -> new Decision(MessageStatus.FAILED, null);
 			case BURST_LIMIT, DAILY_LIMIT, UNAVAILABLE -> attemptNumber >= maxAttempts
-					? new Decision(EmailStatus.FAILED, null)
-					: new Decision(EmailStatus.PENDING, delayFor(classification, attemptNumber, retryAfterSeconds));
+					? new Decision(MessageStatus.FAILED, null)
+					: new Decision(MessageStatus.PENDING, delayFor(classification, attemptNumber, retryAfterSeconds));
 		};
 	}
 

@@ -1,4 +1,4 @@
-package io.github.ramossvitor.herald.email;
+package io.github.ramossvitor.herald.quota;
 
 public class QuotaExceededException extends RuntimeException {
 

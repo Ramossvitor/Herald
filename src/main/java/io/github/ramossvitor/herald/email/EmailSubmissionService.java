@@ -1,12 +1,18 @@
 package io.github.ramossvitor.herald.email;
 
 import java.time.Clock;
-import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import io.github.ramossvitor.herald.outbox.Message;
+import io.github.ramossvitor.herald.outbox.MessageRepository;
+import io.github.ramossvitor.herald.quota.ChannelLimits;
+import io.github.ramossvitor.herald.quota.QuotaService;
+import io.github.ramossvitor.herald.sender.Channel;
 import io.github.ramossvitor.herald.sender.SenderIdentityService;
 import io.github.ramossvitor.herald.tenant.TenantEmailSettings;
 import io.github.ramossvitor.herald.tenant.TenantEmailSettingsRepository;
@@ -25,14 +31,14 @@ public class EmailSubmissionService {
 	@PersistenceContext
 	private EntityManager entityManager;
 
-	private final EmailMessageRepository messages;
+	private final MessageRepository messages;
 	private final TenantEmailSettingsRepository emailSettings;
 	private final QuotaService quotas;
 	private final SenderIdentityService senderIdentities;
 	private final Clock clock;
 	private final MeterRegistry metrics;
 
-	public EmailSubmissionService(EmailMessageRepository messages, TenantEmailSettingsRepository emailSettings,
+	public EmailSubmissionService(MessageRepository messages, TenantEmailSettingsRepository emailSettings,
 			QuotaService quotas, SenderIdentityService senderIdentities, Clock clock, MeterRegistry metrics) {
 		this.messages = messages;
 		this.emailSettings = emailSettings;
@@ -42,7 +48,7 @@ public class EmailSubmissionService {
 		this.metrics = metrics;
 	}
 
-	public record Submission(EmailMessage message, boolean deduplicated) {
+	public record Submission(Message message, boolean deduplicated) {
 	}
 
 	@Transactional
@@ -54,8 +60,8 @@ public class EmailSubmissionService {
 		lockTenant(tenantId);
 
 		if (request.idempotencyKey() != null) {
-			EmailMessage existing = messages
-					.findByTenantIdAndIdempotencyKey(tenantId, request.idempotencyKey())
+			Message existing = messages
+					.findByTenantIdAndChannelAndIdempotencyKey(tenantId, Channel.EMAIL, request.idempotencyKey())
 					.orElse(null);
 			if (existing != null) {
 				return new Submission(existing, true);
@@ -74,22 +80,38 @@ public class EmailSubmissionService {
 				request.from() != null ? request.from() : settings.getFromAddress());
 
 		String canonicalRecipient = EmailAddresses.canonicalize(request.to());
-		quotas.check(settings, canonicalRecipient, request.limitKeysOrEmpty());
+		quotas.check(limitsFor(settings), canonicalRecipient, request.limitKeysOrEmpty());
 
-		EmailMessage message = messages.save(new EmailMessage(
+		Message message = messages.save(new Message(
 				tenantId,
+				Channel.EMAIL,
 				request.idempotencyKey(),
 				request.to(),
 				canonicalRecipient,
 				from,
-				request.subject(),
-				request.html(),
-				request.text(),
-				request.replyTo(),
+				payloadOf(request),
 				request.limitKeysOrEmpty(),
 				clock.instant()));
-		metrics.counter("herald.emails.accepted").increment();
+		metrics.counter("herald.messages.accepted", "channel", "email").increment();
 		return new Submission(message, false);
+	}
+
+	private static ChannelLimits limitsFor(TenantEmailSettings settings) {
+		return new ChannelLimits(settings.getTenantId(), Channel.EMAIL, settings.getDailyLimit(),
+				settings.getRecipientCooldownSeconds());
+	}
+
+	/** Null entries are omitted, not stored: the column is JSON, and an absent
+	 * key reads the same as a null one without carrying it around. */
+	private static Map<String, Object> payloadOf(SendEmailRequest request) {
+		Map<String, Object> payload = new LinkedHashMap<>();
+		payload.put("subject", request.subject());
+		payload.put("html", request.html());
+		payload.put("text", request.text());
+		if (request.replyTo() != null) {
+			payload.put("replyTo", request.replyTo());
+		}
+		return payload;
 	}
 
 	private void lockTenant(UUID tenantId) {

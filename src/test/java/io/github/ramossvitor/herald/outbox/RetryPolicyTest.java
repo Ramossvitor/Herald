@@ -1,13 +1,10 @@
-package io.github.ramossvitor.herald.email.outbox;
+package io.github.ramossvitor.herald.outbox;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Duration;
 
 import org.junit.jupiter.api.Test;
-
-import io.github.ramossvitor.herald.email.EmailStatus;
-import io.github.ramossvitor.herald.email.resend.ResendResponseClassifier.Classification;
 
 class RetryPolicyTest {
 
@@ -18,20 +15,20 @@ class RetryPolicyTest {
 	@Test
 	void successIsTerminal() {
 		RetryPolicy.Decision decision = policy.decide(Classification.SUCCESS, 1, null);
-		assertThat(decision.status()).isEqualTo(EmailStatus.SENT);
+		assertThat(decision.status()).isEqualTo(MessageStatus.SENT);
 		assertThat(decision.delay()).isNull();
 	}
 
 	@Test
 	void rejectionIsTerminalOnFirstAttempt() {
 		RetryPolicy.Decision decision = policy.decide(Classification.REJECTED, 1, null);
-		assertThat(decision.status()).isEqualTo(EmailStatus.FAILED);
+		assertThat(decision.status()).isEqualTo(MessageStatus.FAILED);
 	}
 
 	@Test
 	void burstRetriesQuicklyHonoringRetryAfter() {
 		RetryPolicy.Decision decision = policy.decide(Classification.BURST_LIMIT, 1, 1);
-		assertThat(decision.status()).isEqualTo(EmailStatus.PENDING);
+		assertThat(decision.status()).isEqualTo(MessageStatus.PENDING);
 		assertThat(decision.delay()).isBetween(Duration.ofSeconds(1), Duration.ofSeconds(1).plusMillis(JITTER_MS));
 	}
 
@@ -51,7 +48,7 @@ class RetryPolicyTest {
 	@Test
 	void providerDailyLimitWaitsHours() {
 		RetryPolicy.Decision decision = policy.decide(Classification.DAILY_LIMIT, 1, null);
-		assertThat(decision.status()).isEqualTo(EmailStatus.PENDING);
+		assertThat(decision.status()).isEqualTo(MessageStatus.PENDING);
 		assertThat(decision.delay()).isBetween(Duration.ofHours(4), Duration.ofHours(4).plusMillis(JITTER_MS));
 	}
 
@@ -71,13 +68,13 @@ class RetryPolicyTest {
 
 	@Test
 	void attemptsExhaustedIsTerminalForRetryableFailures() {
-		assertThat(policy.decide(Classification.BURST_LIMIT, 8, null).status()).isEqualTo(EmailStatus.FAILED);
-		assertThat(policy.decide(Classification.DAILY_LIMIT, 8, null).status()).isEqualTo(EmailStatus.FAILED);
-		assertThat(policy.decide(Classification.UNAVAILABLE, 8, null).status()).isEqualTo(EmailStatus.FAILED);
+		assertThat(policy.decide(Classification.BURST_LIMIT, 8, null).status()).isEqualTo(MessageStatus.FAILED);
+		assertThat(policy.decide(Classification.DAILY_LIMIT, 8, null).status()).isEqualTo(MessageStatus.FAILED);
+		assertThat(policy.decide(Classification.UNAVAILABLE, 8, null).status()).isEqualTo(MessageStatus.FAILED);
 	}
 
 	@Test
 	void successOnLastAttemptStillCounts() {
-		assertThat(policy.decide(Classification.SUCCESS, 8, null).status()).isEqualTo(EmailStatus.SENT);
+		assertThat(policy.decide(Classification.SUCCESS, 8, null).status()).isEqualTo(MessageStatus.SENT);
 	}
 }

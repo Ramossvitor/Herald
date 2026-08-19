@@ -4,7 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
 
-import io.github.ramossvitor.herald.email.resend.ResendResponseClassifier.Classification;
+import io.github.ramossvitor.herald.outbox.Classification;
 
 class ResendResponseClassifierTest {
 

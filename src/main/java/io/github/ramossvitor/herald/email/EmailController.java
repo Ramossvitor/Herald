@@ -13,8 +13,12 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import io.github.ramossvitor.herald.common.NotFoundException;
-import io.github.ramossvitor.herald.email.outbox.OutboxWorker;
+import io.github.ramossvitor.herald.outbox.Message;
+import io.github.ramossvitor.herald.outbox.MessageRepository;
+import io.github.ramossvitor.herald.outbox.MessageStatus;
+import io.github.ramossvitor.herald.outbox.OutboxWorker;
 import io.github.ramossvitor.herald.security.TenantPrincipal;
+import io.github.ramossvitor.herald.sender.Channel;
 import jakarta.validation.Valid;
 
 @RestController
@@ -22,16 +26,16 @@ import jakarta.validation.Valid;
 public class EmailController {
 
 	private final EmailSubmissionService submissions;
-	private final EmailMessageRepository messages;
+	private final MessageRepository messages;
 	private final OutboxWorker worker;
 
-	public EmailController(EmailSubmissionService submissions, EmailMessageRepository messages, OutboxWorker worker) {
+	public EmailController(EmailSubmissionService submissions, MessageRepository messages, OutboxWorker worker) {
 		this.submissions = submissions;
 		this.messages = messages;
 		this.worker = worker;
 	}
 
-	public record SendEmailResponse(UUID id, EmailStatus status, boolean deduplicated, Instant createdAt) {
+	public record SendEmailResponse(UUID id, MessageStatus status, boolean deduplicated, Instant createdAt) {
 	}
 
 	@PostMapping
@@ -40,18 +44,18 @@ public class EmailController {
 		EmailSubmissionService.Submission submission = submissions.submit(principal.tenantId(), request);
 		// After the commit, so the worker's next pass can already see the row.
 		worker.nudge();
-		EmailMessage message = submission.message();
+		Message message = submission.message();
 		return ResponseEntity.accepted().body(new SendEmailResponse(
 				message.getId(), message.getStatus(), submission.deduplicated(), message.getCreatedAt()));
 	}
 
-	public record EmailStatusResponse(UUID id, EmailStatus status, int attemptCount, String providerMessageId,
+	public record EmailStatusResponse(UUID id, MessageStatus status, int attemptCount, String providerMessageId,
 			String lastError, Instant createdAt, Instant sentAt) {
 	}
 
 	@GetMapping("/{id}")
 	public EmailStatusResponse status(@PathVariable UUID id, @AuthenticationPrincipal TenantPrincipal principal) {
-		EmailMessage message = messages.findByIdAndTenantId(id, principal.tenantId())
+		Message message = messages.findByIdAndTenantIdAndChannel(id, principal.tenantId(), Channel.EMAIL)
 				.orElseThrow(() -> new NotFoundException("email not found: " + id));
 		return new EmailStatusResponse(message.getId(), message.getStatus(), message.getAttemptCount(),
 				message.getProviderMessageId(), message.getLastError(), message.getCreatedAt(), message.getSentAt());

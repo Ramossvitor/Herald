@@ -35,13 +35,14 @@ import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
 import com.github.tomakehurst.wiremock.stubbing.Scenario;
 
-import io.github.ramossvitor.herald.email.EmailMessage;
-import io.github.ramossvitor.herald.email.EmailMessageRepository;
-import io.github.ramossvitor.herald.email.EmailStatus;
 import io.github.ramossvitor.herald.email.EmailSubmissionService;
 import io.github.ramossvitor.herald.email.SendEmailRequest;
-import io.github.ramossvitor.herald.email.outbox.OutboxStore;
-import io.github.ramossvitor.herald.email.outbox.OutboxWorker;
+import io.github.ramossvitor.herald.outbox.Message;
+import io.github.ramossvitor.herald.outbox.MessageRepository;
+import io.github.ramossvitor.herald.outbox.MessageStatus;
+import io.github.ramossvitor.herald.outbox.OutboxStore;
+import io.github.ramossvitor.herald.outbox.OutboxWorker;
+import io.github.ramossvitor.herald.sender.Channel;
 import io.github.ramossvitor.herald.tenant.Tenant;
 import io.github.ramossvitor.herald.tenant.admin.TenantAdminService;
 
@@ -86,7 +87,7 @@ class OutboxIntegrationTest {
 	private OutboxStore store;
 
 	@Autowired
-	private EmailMessageRepository messages;
+	private MessageRepository messages;
 
 	@Autowired
 	private JdbcTemplate jdbc;
@@ -96,7 +97,7 @@ class OutboxIntegrationTest {
 		RESEND.resetAll();
 		// Each test reasons about "everything due" — leftovers from other
 		// tests would leak into runOnce() counts and claims.
-		jdbc.update("delete from email_messages");
+		jdbc.update("delete from messages");
 	}
 
 	@Test
@@ -107,8 +108,8 @@ class OutboxIntegrationTest {
 		int processed = worker.runOnce();
 
 		assertThat(processed).isEqualTo(1);
-		EmailMessage message = messages.findById(id).orElseThrow();
-		assertThat(message.getStatus()).isEqualTo(EmailStatus.SENT);
+		Message message = messages.findById(id).orElseThrow();
+		assertThat(message.getStatus()).isEqualTo(MessageStatus.SENT);
 		assertThat(message.getProviderMessageId()).isEqualTo("re_123");
 		assertThat(message.getAttemptCount()).isEqualTo(1);
 		assertThat(message.getSentAt()).isNotNull();
@@ -137,16 +138,16 @@ class OutboxIntegrationTest {
 		UUID id = submit(newTenant(), "player@example.com");
 		worker.runOnce();
 
-		EmailMessage afterBurst = messages.findById(id).orElseThrow();
-		assertThat(afterBurst.getStatus()).isEqualTo(EmailStatus.PENDING);
+		Message afterBurst = messages.findById(id).orElseThrow();
+		assertThat(afterBurst.getStatus()).isEqualTo(MessageStatus.PENDING);
 		assertThat(afterBurst.getAttemptCount()).isEqualTo(1);
 		assertThat(afterBurst.getLastError()).contains("429");
 
 		forceDue(id);
 		worker.runOnce();
 
-		EmailMessage sent = messages.findById(id).orElseThrow();
-		assertThat(sent.getStatus()).isEqualTo(EmailStatus.SENT);
+		Message sent = messages.findById(id).orElseThrow();
+		assertThat(sent.getStatus()).isEqualTo(MessageStatus.SENT);
 		assertThat(sent.getAttemptCount()).isEqualTo(2);
 		assertThat(sent.getProviderMessageId()).isEqualTo("re_after_burst");
 	}
@@ -159,8 +160,8 @@ class OutboxIntegrationTest {
 
 		worker.runOnce();
 
-		EmailMessage message = messages.findById(id).orElseThrow();
-		assertThat(message.getStatus()).isEqualTo(EmailStatus.PENDING);
+		Message message = messages.findById(id).orElseThrow();
+		assertThat(message.getStatus()).isEqualTo(MessageStatus.PENDING);
 		assertThat(message.getNextAttemptAt()).isAfter(Instant.now().plus(Duration.ofHours(3)));
 	}
 
@@ -172,8 +173,8 @@ class OutboxIntegrationTest {
 
 		worker.runOnce();
 
-		EmailMessage message = messages.findById(id).orElseThrow();
-		assertThat(message.getStatus()).isEqualTo(EmailStatus.FAILED);
+		Message message = messages.findById(id).orElseThrow();
+		assertThat(message.getStatus()).isEqualTo(MessageStatus.FAILED);
 		assertThat(message.getAttemptCount()).isEqualTo(1);
 		assertThat(message.getLastError()).contains("http 422");
 	}
@@ -184,41 +185,41 @@ class OutboxIntegrationTest {
 		UUID id = submit(newTenant(), "player@example.com");
 
 		worker.runOnce();
-		EmailMessage first = messages.findById(id).orElseThrow();
-		assertThat(first.getStatus()).isEqualTo(EmailStatus.PENDING);
+		Message first = messages.findById(id).orElseThrow();
+		assertThat(first.getStatus()).isEqualTo(MessageStatus.PENDING);
 		assertThat(first.getNextAttemptAt()).isAfter(Instant.now().plus(Duration.ofSeconds(25)));
 
 		forceDue(id);
 		worker.runOnce();
-		assertThat(messages.findById(id).orElseThrow().getStatus()).isEqualTo(EmailStatus.PENDING);
+		assertThat(messages.findById(id).orElseThrow().getStatus()).isEqualTo(MessageStatus.PENDING);
 
 		// max-attempts is 3 in this test context.
 		forceDue(id);
 		worker.runOnce();
-		EmailMessage dead = messages.findById(id).orElseThrow();
-		assertThat(dead.getStatus()).isEqualTo(EmailStatus.FAILED);
+		Message dead = messages.findById(id).orElseThrow();
+		assertThat(dead.getStatus()).isEqualTo(MessageStatus.FAILED);
 		assertThat(dead.getAttemptCount()).isEqualTo(3);
 	}
 
 	@Test
 	void recoveryReleasesRowsAbandonedInSending() {
 		UUID id = submit(newTenant(), "player@example.com");
-		jdbc.update("update email_messages set status = 'SENDING', updated_at = now() - interval '20 minutes' "
+		jdbc.update("update messages set status = 'SENDING', updated_at = now() - interval '20 minutes' "
 				+ "where id = ?", id);
 
 		int released = store.releaseStuckSending(Duration.ofMinutes(10));
 
 		assertThat(released).isEqualTo(1);
-		assertThat(messages.findById(id).orElseThrow().getStatus()).isEqualTo(EmailStatus.PENDING);
+		assertThat(messages.findById(id).orElseThrow().getStatus()).isEqualTo(MessageStatus.PENDING);
 	}
 
 	@Test
 	void recoveryLeavesRecentSendingAlone() {
 		UUID id = submit(newTenant(), "player@example.com");
-		jdbc.update("update email_messages set status = 'SENDING' where id = ?", id);
+		jdbc.update("update messages set status = 'SENDING' where id = ?", id);
 
 		assertThat(store.releaseStuckSending(Duration.ofMinutes(10))).isZero();
-		assertThat(messages.findById(id).orElseThrow().getStatus()).isEqualTo(EmailStatus.SENDING);
+		assertThat(messages.findById(id).orElseThrow().getStatus()).isEqualTo(MessageStatus.SENDING);
 	}
 
 	@Test
@@ -230,8 +231,8 @@ class OutboxIntegrationTest {
 
 		ExecutorService executor = Executors.newFixedThreadPool(2);
 		try {
-			Future<List<EmailMessage>> left = executor.submit(() -> store.claimDueBatch(10));
-			Future<List<EmailMessage>> right = executor.submit(() -> store.claimDueBatch(10));
+			Future<List<Message>> left = executor.submit(() -> store.claimDueBatch(Channel.EMAIL, 10));
+			Future<List<Message>> right = executor.submit(() -> store.claimDueBatch(Channel.EMAIL, 10));
 
 			Set<UUID> ids = new HashSet<>();
 			left.get().forEach(message -> ids.add(message.getId()));
@@ -262,6 +263,6 @@ class OutboxIntegrationTest {
 	}
 
 	private void forceDue(UUID id) {
-		jdbc.update("update email_messages set next_attempt_at = now() - interval '1 second' where id = ?", id);
+		jdbc.update("update messages set next_attempt_at = now() - interval '1 second' where id = ?", id);
 	}
 }

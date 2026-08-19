@@ -16,10 +16,16 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClient.RequestHeadersSpec.ConvertibleClientHttpResponse;
 
 import io.github.ramossvitor.herald.common.HeraldProperties;
-import io.github.ramossvitor.herald.email.EmailMessage;
+import io.github.ramossvitor.herald.outbox.ChannelProvider;
+import io.github.ramossvitor.herald.outbox.Classification;
+import io.github.ramossvitor.herald.outbox.Message;
+import io.github.ramossvitor.herald.sender.Channel;
 
 @Component
-public class ResendClient {
+public class ResendClient implements ChannelProvider {
+
+	/** Long enough to explain a rejection, short enough not to fill the row. */
+	private static final int MAX_ERROR_LENGTH = 500;
 
 	private final HeraldProperties.Resend properties;
 	private final RestClient rest;
@@ -41,10 +47,16 @@ public class ResendClient {
 				.build();
 	}
 
+	@Override
+	public Channel channel() {
+		return Channel.EMAIL;
+	}
+
 	/**
 	 * A missing key pauses dispatch (messages stay PENDING) instead of failing
 	 * them against a provider that was never called.
 	 */
+	@Override
 	public boolean configured() {
 		return !properties.apiKey().isBlank();
 	}
@@ -57,19 +69,22 @@ public class ResendClient {
 		}
 	}
 
-	public Outcome send(EmailMessage message) {
+	@Override
+	public Attempt send(Message message) {
 		Map<String, Object> payload = new LinkedHashMap<>();
-		payload.put("from", message.getFromAddress());
+		payload.put("from", message.getSender());
 		payload.put("to", List.of(message.getRecipient()));
-		payload.put("subject", message.getSubject());
-		payload.put("html", message.getHtmlBody());
-		payload.put("text", message.getTextBody());
-		if (message.getReplyTo() != null) {
-			payload.put("reply_to", message.getReplyTo());
+		payload.put("subject", message.payloadText("subject"));
+		payload.put("html", message.payloadText("html"));
+		payload.put("text", message.payloadText("text"));
+		String replyTo = message.payloadText("replyTo");
+		if (replyTo != null) {
+			payload.put("reply_to", replyTo);
 		}
 
+		Outcome outcome;
 		try {
-			return rest.post()
+			outcome = rest.post()
 					.uri("/emails")
 					.header(HttpHeaders.AUTHORIZATION, "Bearer " + properties.apiKey())
 					// The message id doubles as the provider idempotency key: a
@@ -81,8 +96,20 @@ public class ResendClient {
 					.exchange(ResendClient::toOutcome);
 		}
 		catch (Exception ex) {
-			return new Outcome(null, null, null, ex.getMessage());
+			outcome = new Outcome(null, null, null, ex.getMessage());
 		}
+
+		if (outcome.transportFailed()) {
+			return Attempt.failed(Classification.UNAVAILABLE, truncate("transport: " + outcome.transportError()), null);
+		}
+		Classification classification = ResendResponseClassifier.classify(outcome.httpStatus(), outcome.body());
+		if (classification == Classification.SUCCESS) {
+			return Attempt.success(ResendResponseClassifier.providerMessageId(outcome.body()));
+		}
+		// Resend echoes back only what it was told about the message, never the
+		// credential it was told with, so the body is safe to persist.
+		return Attempt.failed(classification, truncate("http " + outcome.httpStatus() + ": " + outcome.body()),
+				outcome.retryAfterSeconds());
 	}
 
 	/**
@@ -138,6 +165,10 @@ public class ResendClient {
 		catch (Exception ex) {
 			return new Outcome(null, null, null, ex.getMessage());
 		}
+	}
+
+	private static String truncate(String value) {
+		return value.length() <= MAX_ERROR_LENGTH ? value : value.substring(0, MAX_ERROR_LENGTH);
 	}
 
 	private static Outcome toOutcome(HttpRequest request, ConvertibleClientHttpResponse response) throws IOException {
