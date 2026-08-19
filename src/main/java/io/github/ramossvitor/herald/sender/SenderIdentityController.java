@@ -38,7 +38,7 @@ public class SenderIdentityController {
 	@ResponseStatus(HttpStatus.CREATED)
 	public SenderIdentityResponse register(@Valid @RequestBody RegisterDomainRequest request,
 			@AuthenticationPrincipal TenantPrincipal principal) {
-		return SenderIdentityResponse.from(service.registerCustomDomain(principal.tenantId(), request.domain()));
+		return SenderIdentityResponse.from(service.registerCustomDomain(principal.tenantId(), request.domain(), false));
 	}
 
 	@GetMapping

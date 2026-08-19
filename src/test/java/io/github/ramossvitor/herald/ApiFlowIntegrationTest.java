@@ -35,6 +35,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 @Import(TestcontainersConfiguration.class)
 @TestPropertySource(properties = {
 		"herald.admin-api-key=test-admin-master-key",
+		"herald.email.shared-root-domain=send.test.example",
 		"herald.resend.api-key=",
 		"herald.outbox.poll-interval=1h",
 })
@@ -149,6 +150,53 @@ class ApiFlowIntegrationTest {
 				.andExpect(status().is(422))
 				.andExpect(jsonPath("$.type").value("/errors/sender-not-verified"))
 				.andExpect(jsonPath("$.from").value("spoof@other.example"));
+	}
+
+	@Test
+	void tenantWithoutFromAddressLandsOnTheSharedTier() throws Exception {
+		String slug = "shared-" + SLUGS.incrementAndGet();
+		MvcResult created = mvc.perform(post("/admin/v1/tenants")
+				.header("Authorization", ADMIN)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+						{"slug":"%s","name":"Sharey","email":{"dailyLimit":90,"recipientCooldownSeconds":0}}
+						""".formatted(slug)))
+				.andExpect(status().isCreated())
+				.andReturn();
+		UUID tenantId = UUID.fromString(
+				json.readTree(created.getResponse().getContentAsString()).get("id").asText());
+		MvcResult issued = mvc.perform(post("/admin/v1/tenants/" + tenantId + "/api-keys")
+				.header("Authorization", ADMIN)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"label\":\"test\"}"))
+				.andExpect(status().isCreated())
+				.andReturn();
+		String bearer = "Bearer " + json.readTree(issued.getResponse().getContentAsString()).get("apiKey").asText();
+
+		// No from in the request: the shared default applies and is verified.
+		mvc.perform(post("/v1/emails")
+				.header("Authorization", bearer)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"to\":\"a@example.com\",\"subject\":\"Hello\",\"html\":\"<p>Hi</p>\",\"text\":\"Hi\"}"))
+				.andExpect(status().isAccepted());
+
+		// The tenant's own shared address works as an explicit from too.
+		mvc.perform(post("/v1/emails")
+				.header("Authorization", bearer)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(("{\"to\":\"b@example.com\",\"subject\":\"Hello\",\"html\":\"<p>Hi</p>\",\"text\":\"Hi\","
+						+ "\"from\":\"%s@send.test.example\"}").formatted(slug)))
+				.andExpect(status().isAccepted());
+
+		// Another tenant's address on the same root does not: the shared tier
+		// grants one mailbox, never the whole domain.
+		mvc.perform(post("/v1/emails")
+				.header("Authorization", bearer)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"to\":\"c@example.com\",\"subject\":\"Hello\",\"html\":\"<p>Hi</p>\",\"text\":\"Hi\","
+						+ "\"from\":\"someone-else@send.test.example\"}"))
+				.andExpect(status().is(422))
+				.andExpect(jsonPath("$.type").value("/errors/sender-not-verified"));
 	}
 
 	@Test

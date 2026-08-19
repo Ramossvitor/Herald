@@ -45,6 +45,7 @@ import io.github.ramossvitor.herald.sender.SenderIdentityVerifier;
 @Import(TestcontainersConfiguration.class)
 @TestPropertySource(properties = {
 		"herald.admin-api-key=test-admin-master-key",
+		"herald.email.shared-root-domain=send.test.example",
 		"herald.resend.api-key=re_test_fake",
 		"herald.outbox.poll-interval=1h",
 })
@@ -231,6 +232,36 @@ class SenderIdentityIntegrationTest {
 		RESEND.verify(WireMock.deleteRequestedFor(WireMock.urlEqualTo("/domains/dom_6")));
 		mvc.perform(get("/v1/sender-identities").header("Authorization", tenant.bearer()))
 				.andExpect(jsonPath("$[?(@.id == '%s')]".formatted(id)).isEmpty());
+	}
+
+	@Test
+	void sharedRootSubdomainsAreReservedForTheOperator() throws Exception {
+		Provisioned tenant = provisionTenant();
+		mvc.perform(post("/v1/sender-identities")
+				.header("Authorization", tenant.bearer())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"domain\":\"anything.send.test.example\"}"))
+				.andExpect(status().isConflict());
+		mvc.perform(post("/v1/sender-identities")
+				.header("Authorization", tenant.bearer())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"domain\":\"send.test.example\"}"))
+				.andExpect(status().isConflict());
+	}
+
+	@Test
+	void operatorCanProvisionADedicatedSubdomainOfTheSharedRoot() throws Exception {
+		RESEND.stubFor(WireMock.post(WireMock.urlEqualTo("/domains"))
+				.willReturn(WireMock.okJson("{\"id\":\"dom_8\",\"status\":\"not_started\","
+						+ "\"records\":[{\"record\":\"DKIM\",\"name\":\"resend._domainkey\"}]}")));
+		Provisioned tenant = provisionTenant();
+
+		mvc.perform(post("/admin/v1/tenants/" + tenant.tenantId + "/sender-identities")
+				.header("Authorization", ADMIN)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"domain\":\"dedicated.send.test.example\"}"))
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.identifier").value("dedicated.send.test.example"));
 	}
 
 	@Test

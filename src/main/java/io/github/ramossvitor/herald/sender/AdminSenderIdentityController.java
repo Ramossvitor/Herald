@@ -37,7 +37,7 @@ public class AdminSenderIdentityController {
 	@ResponseStatus(HttpStatus.CREATED)
 	public SenderIdentityResponse register(@PathVariable UUID tenantId,
 			@Valid @RequestBody RegisterDomainRequest request) {
-		return SenderIdentityResponse.from(service.registerCustomDomain(tenantId, request.domain()));
+		return SenderIdentityResponse.from(service.registerCustomDomain(tenantId, request.domain(), true));
 	}
 
 	@GetMapping

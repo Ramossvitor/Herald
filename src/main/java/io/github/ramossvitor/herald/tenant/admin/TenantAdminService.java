@@ -52,8 +52,9 @@ public class TenantAdminService {
 			throw new ConflictException("tenant slug already exists: " + slug);
 		}
 		Tenant tenant = tenants.save(new Tenant(slug, name, clock.instant()));
-		emailSettings.save(new TenantEmailSettings(tenant.getId(), fromAddress, dailyLimit, recipientCooldownSeconds));
-		senderIdentities.trustCustomDomain(tenant.getId(), fromAddress);
+		String resolvedFrom = fromAddress != null ? fromAddress : senderIdentities.defaultSharedFrom(slug, name);
+		emailSettings.save(new TenantEmailSettings(tenant.getId(), resolvedFrom, dailyLimit, recipientCooldownSeconds));
+		senderIdentities.provisionFor(tenant.getId(), slug, fromAddress);
 		return tenant;
 	}
 
@@ -66,8 +67,9 @@ public class TenantAdminService {
 	public void updateEmailSettings(UUID tenantId, String fromAddress, int dailyLimit, int recipientCooldownSeconds) {
 		TenantEmailSettings settings = emailSettings.findById(tenantId)
 				.orElseThrow(() -> new NotFoundException("tenant not found: " + tenantId));
-		settings.update(fromAddress, dailyLimit, recipientCooldownSeconds);
-		senderIdentities.trustCustomDomain(tenantId, fromAddress);
+		String resolvedFrom = fromAddress != null ? fromAddress : settings.getFromAddress();
+		settings.update(resolvedFrom, dailyLimit, recipientCooldownSeconds);
+		senderIdentities.trustCustomDomain(tenantId, resolvedFrom);
 	}
 
 	@Transactional

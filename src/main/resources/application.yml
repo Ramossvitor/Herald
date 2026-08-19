@@ -35,6 +35,12 @@ management:
 herald:
   # Empty admin key disables the /admin/v1/** surface entirely (fail closed).
   admin-api-key: ${ADMIN_API_KEY:}
+  email:
+    # The operator-owned domain every tenant gets a free sending address on.
+    # Register and verify it once at the provider, publish its DNS records, then
+    # set this. Empty disables the shared tier: tenants must then be created
+    # with an explicit fromAddress on a domain the operator verified.
+    shared-root-domain: ${HERALD_SHARED_ROOT_DOMAIN:}
   resend:
     base-url: https://api.resend.com
     # Empty key pauses dispatch: messages queue as PENDING until it is set.
