@@ -256,7 +256,7 @@ class OutboxIntegrationTest {
 
 	private UUID submit(Tenant tenant, String to) {
 		return submissions
-				.submit(tenant.getId(), new SendEmailRequest(to, "Hello", "<p>Hi</p>", "Hi", null, null, null))
+				.submit(tenant.getId(), new SendEmailRequest(to, "Hello", "<p>Hi</p>", "Hi", null, null, null, null))
 				.message()
 				.getId();
 	}

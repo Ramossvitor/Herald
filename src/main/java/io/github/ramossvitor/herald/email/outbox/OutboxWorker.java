@@ -12,12 +12,9 @@ import org.springframework.stereotype.Component;
 
 import io.github.ramossvitor.herald.common.HeraldProperties;
 import io.github.ramossvitor.herald.email.EmailMessage;
-import io.github.ramossvitor.herald.email.EmailStatus;
 import io.github.ramossvitor.herald.email.resend.ResendClient;
 import io.github.ramossvitor.herald.email.resend.ResendResponseClassifier;
 import io.github.ramossvitor.herald.email.resend.ResendResponseClassifier.Classification;
-import io.github.ramossvitor.herald.tenant.TenantEmailSettings;
-import io.github.ramossvitor.herald.tenant.TenantEmailSettingsRepository;
 import io.micrometer.core.instrument.MeterRegistry;
 
 /**
@@ -41,7 +38,6 @@ public class OutboxWorker {
 
 	private final OutboxStore store;
 	private final ResendClient resend;
-	private final TenantEmailSettingsRepository emailSettings;
 	private final HeraldProperties.Outbox properties;
 	private final RetryPolicy retryPolicy;
 	private final MeterRegistry metrics;
@@ -51,11 +47,9 @@ public class OutboxWorker {
 	private int ticksSinceLastPoll = 0;
 	private boolean warnedNotConfigured = false;
 
-	public OutboxWorker(OutboxStore store, ResendClient resend, TenantEmailSettingsRepository emailSettings,
-			HeraldProperties properties, MeterRegistry metrics) {
+	public OutboxWorker(OutboxStore store, ResendClient resend, HeraldProperties properties, MeterRegistry metrics) {
 		this.store = store;
 		this.resend = resend;
-		this.emailSettings = emailSettings;
 		this.properties = properties.outbox();
 		this.retryPolicy = new RetryPolicy(this.properties.maxAttempts());
 		this.metrics = metrics;
@@ -111,17 +105,7 @@ public class OutboxWorker {
 	private void processOne(EmailMessage message) {
 		MDC.put("messageId", message.getId().toString());
 		try {
-			TenantEmailSettings settings = emailSettings.findById(message.getTenantId()).orElse(null);
-			if (settings == null) {
-				store.recordOutcome(message.getId(),
-						new RetryPolicy.Decision(EmailStatus.FAILED, null), null,
-						"tenant email settings missing");
-				metrics.counter("herald.emails.failed").increment();
-				log.error("message failed: tenant {} has no email settings", message.getTenantId());
-				return;
-			}
-
-			ResendClient.Outcome outcome = resend.send(message, settings.getFromAddress());
+			ResendClient.Outcome outcome = resend.send(message);
 			Classification classification = outcome.transportFailed()
 					? Classification.UNAVAILABLE
 					: ResendResponseClassifier.classify(outcome.httpStatus(), outcome.body());

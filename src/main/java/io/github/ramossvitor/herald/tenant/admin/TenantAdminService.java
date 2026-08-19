@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 import io.github.ramossvitor.herald.common.ConflictException;
 import io.github.ramossvitor.herald.common.NotFoundException;
 import io.github.ramossvitor.herald.security.ApiKeys;
+import io.github.ramossvitor.herald.sender.SenderIdentityService;
 import io.github.ramossvitor.herald.tenant.ApiKey;
 import io.github.ramossvitor.herald.tenant.ApiKeyRepository;
 import io.github.ramossvitor.herald.tenant.Tenant;
@@ -26,14 +27,17 @@ public class TenantAdminService {
 	private final TenantEmailSettingsRepository emailSettings;
 	private final TenantLimitPolicyRepository limitPolicies;
 	private final ApiKeyRepository apiKeys;
+	private final SenderIdentityService senderIdentities;
 	private final Clock clock;
 
 	public TenantAdminService(TenantRepository tenants, TenantEmailSettingsRepository emailSettings,
-			TenantLimitPolicyRepository limitPolicies, ApiKeyRepository apiKeys, Clock clock) {
+			TenantLimitPolicyRepository limitPolicies, ApiKeyRepository apiKeys,
+			SenderIdentityService senderIdentities, Clock clock) {
 		this.tenants = tenants;
 		this.emailSettings = emailSettings;
 		this.limitPolicies = limitPolicies;
 		this.apiKeys = apiKeys;
+		this.senderIdentities = senderIdentities;
 		this.clock = clock;
 	}
 
@@ -48,8 +52,20 @@ public class TenantAdminService {
 			throw new ConflictException("tenant slug already exists: " + slug);
 		}
 		Tenant tenant = tenants.save(new Tenant(slug, name, clock.instant()));
-		emailSettings.save(new TenantEmailSettings(tenant.getId(), fromAddress, dailyLimit, recipientCooldownSeconds));
+		// Blank and absent both mean "shared tier" — the input is optional, and
+		// storing an empty from address would leave the tenant unable to send
+		// at all.
+		String configured = blankToNull(fromAddress);
+		String resolvedFrom = configured != null
+				? senderIdentities.normalizeConfigured(configured)
+				: senderIdentities.defaultSharedFrom(slug, name);
+		emailSettings.save(new TenantEmailSettings(tenant.getId(), resolvedFrom, dailyLimit, recipientCooldownSeconds));
+		senderIdentities.provisionFor(tenant.getId(), slug, configured == null ? null : resolvedFrom);
 		return tenant;
+	}
+
+	private static String blankToNull(String value) {
+		return value == null || value.isBlank() ? null : value;
 	}
 
 	@Transactional(readOnly = true)
@@ -61,7 +77,16 @@ public class TenantAdminService {
 	public void updateEmailSettings(UUID tenantId, String fromAddress, int dailyLimit, int recipientCooldownSeconds) {
 		TenantEmailSettings settings = emailSettings.findById(tenantId)
 				.orElseThrow(() -> new NotFoundException("tenant not found: " + tenantId));
-		settings.update(fromAddress, dailyLimit, recipientCooldownSeconds);
+		String configured = blankToNull(fromAddress);
+		String resolvedFrom = configured != null
+				? senderIdentities.normalizeConfigured(configured)
+				: settings.getFromAddress();
+		settings.update(resolvedFrom, dailyLimit, recipientCooldownSeconds);
+		// Only when the operator actually named an address: trusting a domain is
+		// their assertion about it, not a side effect of editing a daily limit.
+		if (configured != null) {
+			senderIdentities.trustCustomDomain(tenantId, resolvedFrom);
+		}
 	}
 
 	@Transactional

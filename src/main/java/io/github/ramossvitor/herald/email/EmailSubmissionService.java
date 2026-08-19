@@ -7,6 +7,7 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import io.github.ramossvitor.herald.sender.SenderIdentityService;
 import io.github.ramossvitor.herald.tenant.TenantEmailSettings;
 import io.github.ramossvitor.herald.tenant.TenantEmailSettingsRepository;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -27,14 +28,16 @@ public class EmailSubmissionService {
 	private final EmailMessageRepository messages;
 	private final TenantEmailSettingsRepository emailSettings;
 	private final QuotaService quotas;
+	private final SenderIdentityService senderIdentities;
 	private final Clock clock;
 	private final MeterRegistry metrics;
 
 	public EmailSubmissionService(EmailMessageRepository messages, TenantEmailSettingsRepository emailSettings,
-			QuotaService quotas, Clock clock, MeterRegistry metrics) {
+			QuotaService quotas, SenderIdentityService senderIdentities, Clock clock, MeterRegistry metrics) {
 		this.messages = messages;
 		this.emailSettings = emailSettings;
 		this.quotas = quotas;
+		this.senderIdentities = senderIdentities;
 		this.clock = clock;
 		this.metrics = metrics;
 	}
@@ -63,6 +66,13 @@ public class EmailSubmissionService {
 				.orElseThrow(() -> new IllegalStateException(
 						"tenant has no email settings — provisioning bug: " + tenantId));
 
+		// Before the quota check on purpose: an unusable sender is a caller
+		// mistake, and must never surface as a quota rejection. The canonical
+		// form comes back out and is what gets stored and sent — sending the
+		// caller's spelling would mean verifying one address and mailing another.
+		String from = senderIdentities.resolveUsable(tenantId,
+				request.from() != null ? request.from() : settings.getFromAddress());
+
 		String canonicalRecipient = EmailAddresses.canonicalize(request.to());
 		quotas.check(settings, canonicalRecipient, request.limitKeysOrEmpty());
 
@@ -71,6 +81,7 @@ public class EmailSubmissionService {
 				request.idempotencyKey(),
 				request.to(),
 				canonicalRecipient,
+				from,
 				request.subject(),
 				request.html(),
 				request.text(),

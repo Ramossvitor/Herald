@@ -32,8 +32,9 @@ public class AdminTenantController {
 		this.service = service;
 	}
 
+	/** A blank fromAddress means "put this tenant on the shared tier". */
 	public record EmailSettingsInput(
-			@NotBlank @Size(max = 320) String fromAddress,
+			@Size(max = 320) String fromAddress,
 			@Min(0) @Max(1_000_000) int dailyLimit,
 			@Min(0) @Max(86_400) int recipientCooldownSeconds) {
 	}

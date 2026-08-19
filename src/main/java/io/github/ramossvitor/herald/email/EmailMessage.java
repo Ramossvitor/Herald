@@ -33,6 +33,10 @@ public class EmailMessage {
 	@Column(name = "recipient_canonical", nullable = false)
 	private String recipientCanonical;
 
+	/** Snapshot: editing tenant settings must not change queued messages. */
+	@Column(name = "from_address", nullable = false)
+	private String fromAddress;
+
 	@Column(nullable = false)
 	private String subject;
 
@@ -79,13 +83,14 @@ public class EmailMessage {
 	}
 
 	public EmailMessage(UUID tenantId, String idempotencyKey, String recipient, String recipientCanonical,
-			String subject, String htmlBody, String textBody, String replyTo, List<String> limitKeys,
-			Instant createdAt) {
+			String fromAddress, String subject, String htmlBody, String textBody, String replyTo,
+			List<String> limitKeys, Instant createdAt) {
 		this.id = UUID.randomUUID();
 		this.tenantId = tenantId;
 		this.idempotencyKey = idempotencyKey;
 		this.recipient = recipient;
 		this.recipientCanonical = recipientCanonical;
+		this.fromAddress = fromAddress;
 		this.subject = subject;
 		this.htmlBody = htmlBody;
 		this.textBody = textBody;
@@ -146,6 +151,10 @@ public class EmailMessage {
 
 	public String getRecipientCanonical() {
 		return recipientCanonical;
+	}
+
+	public String getFromAddress() {
+		return fromAddress;
 	}
 
 	public String getSubject() {
