@@ -1,5 +1,6 @@
 package io.github.ramossvitor.herald;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -150,6 +151,56 @@ class ApiFlowIntegrationTest {
 				.andExpect(status().is(422))
 				.andExpect(jsonPath("$.type").value("/errors/sender-not-verified"))
 				.andExpect(jsonPath("$.from").value("spoof@other.example"));
+	}
+
+	@Test
+	void aFromCarryingASecondAddressIsRefused() throws Exception {
+		Provisioned tenant = provisionTenant(90, 0);
+
+		// The bypass this guards: addrSpec reads the last angle-addr, a mail
+		// parser may take the first. Verifying one and sending the other would
+		// let any tenant mail as anybody through the operator's account.
+		mvc.perform(post("/v1/emails")
+				.header("Authorization", tenant.bearer())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"to\":\"a@example.com\",\"subject\":\"Hello\",\"html\":\"<p>Hi</p>\",\"text\":\"Hi\","
+						+ "\"from\":\"X <spoof@other.example> <billing@acme.example>\"}"))
+				.andExpect(status().is(422))
+				.andExpect(jsonPath("$.type").value("/errors/sender-not-verified"));
+
+		// An address sitting bare in the display name is quoted, not trusted,
+		// so what goes out can only be read one way.
+		MvcResult accepted = mvc.perform(post("/v1/emails")
+				.header("Authorization", tenant.bearer())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"to\":\"b@example.com\",\"subject\":\"Hello\",\"html\":\"<p>Hi</p>\",\"text\":\"Hi\","
+						+ "\"from\":\"spoof@other.example <billing@acme.example>\"}"))
+				.andExpect(status().isAccepted())
+				.andReturn();
+		UUID messageId = UUID.fromString(
+				json.readTree(accepted.getResponse().getContentAsString()).get("id").asText());
+		assertThat(jdbc.queryForObject("select from_address from email_messages where id = ?", String.class,
+				messageId)).isEqualTo("\"spoof@other.example\" <billing@acme.example>");
+	}
+
+	@Test
+	void aBlankFromAddressAlsoMeansTheSharedTier() throws Exception {
+		String slug = "blank-" + SLUGS.incrementAndGet();
+		mvc.perform(post("/admin/v1/tenants")
+				.header("Authorization", ADMIN)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+						{"slug":"%s","name":"Blanky","email":{"fromAddress":"","dailyLimit":90,
+						"recipientCooldownSeconds":0}}
+						""".formatted(slug)))
+				.andExpect(status().isCreated());
+
+		// Blank used to be stored verbatim, leaving a tenant that could never
+		// send: no address resolves to an identity.
+		assertThat(jdbc.queryForObject(
+				"select s.from_address from tenant_email_settings s join tenants t on t.id = s.tenant_id "
+						+ "where t.slug = ?", String.class, slug))
+				.isEqualTo("Blanky <" + slug + "@send.test.example>");
 	}
 
 	@Test

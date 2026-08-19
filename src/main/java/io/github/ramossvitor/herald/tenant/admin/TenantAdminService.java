@@ -52,10 +52,20 @@ public class TenantAdminService {
 			throw new ConflictException("tenant slug already exists: " + slug);
 		}
 		Tenant tenant = tenants.save(new Tenant(slug, name, clock.instant()));
-		String resolvedFrom = fromAddress != null ? fromAddress : senderIdentities.defaultSharedFrom(slug, name);
+		// Blank and absent both mean "shared tier" — the input is optional, and
+		// storing an empty from address would leave the tenant unable to send
+		// at all.
+		String configured = blankToNull(fromAddress);
+		String resolvedFrom = configured != null
+				? senderIdentities.normalizeConfigured(configured)
+				: senderIdentities.defaultSharedFrom(slug, name);
 		emailSettings.save(new TenantEmailSettings(tenant.getId(), resolvedFrom, dailyLimit, recipientCooldownSeconds));
-		senderIdentities.provisionFor(tenant.getId(), slug, fromAddress);
+		senderIdentities.provisionFor(tenant.getId(), slug, configured == null ? null : resolvedFrom);
 		return tenant;
+	}
+
+	private static String blankToNull(String value) {
+		return value == null || value.isBlank() ? null : value;
 	}
 
 	@Transactional(readOnly = true)
@@ -67,9 +77,16 @@ public class TenantAdminService {
 	public void updateEmailSettings(UUID tenantId, String fromAddress, int dailyLimit, int recipientCooldownSeconds) {
 		TenantEmailSettings settings = emailSettings.findById(tenantId)
 				.orElseThrow(() -> new NotFoundException("tenant not found: " + tenantId));
-		String resolvedFrom = fromAddress != null ? fromAddress : settings.getFromAddress();
+		String configured = blankToNull(fromAddress);
+		String resolvedFrom = configured != null
+				? senderIdentities.normalizeConfigured(configured)
+				: settings.getFromAddress();
 		settings.update(resolvedFrom, dailyLimit, recipientCooldownSeconds);
-		senderIdentities.trustCustomDomain(tenantId, resolvedFrom);
+		// Only when the operator actually named an address: trusting a domain is
+		// their assertion about it, not a side effect of editing a daily limit.
+		if (configured != null) {
+			senderIdentities.trustCustomDomain(tenantId, resolvedFrom);
+		}
 	}
 
 	@Transactional

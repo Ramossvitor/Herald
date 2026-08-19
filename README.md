@@ -35,7 +35,9 @@ client app ──POST /v1/emails──▶ quota check (sync) ──▶ outbox ro
   (`acme@send.example`, no DNS work at all), and can upgrade to its own
   domain: Herald registers it with the provider, hands back the DKIM/SPF
   records to publish, and polls until DNS checks out. A `from` is only
-  accepted if it resolves to an identity that tenant actually verified.
+  accepted if it resolves to an identity that tenant actually verified — and
+  it goes out in the canonical form Herald checked, so no address can be
+  verified under one spelling and mailed under another.
 
 ## API
 
@@ -48,7 +50,7 @@ Interactive documentation lives at `/swagger-ui.html` on a running instance.
 | `POST /v1/sender-identities` | tenant key | Register a domain; returns the DNS records to publish |
 | `GET /v1/sender-identities` | tenant key | Identities, their status and DNS records |
 | `POST /v1/sender-identities/{id}/verify` | tenant key | Ask the provider to re-check DNS |
-| `DELETE /v1/sender-identities/{id}` | tenant key | Drop an identity |
+| `DELETE /v1/sender-identities/{id}` | tenant key | Drop an identity (not the one it sends as) |
 | `POST /admin/v1/tenants` | master key | Create a tenant (with email settings) |
 | `GET /admin/v1/tenants` | master key | List tenants |
 | `PUT /admin/v1/tenants/{id}/email-settings` | master key | Update sender/limits |

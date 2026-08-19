@@ -21,6 +21,9 @@ public interface SenderIdentityRepository extends JpaRepository<SenderIdentity, 
 	boolean existsByChannelAndKindAndIdentifierAndProviderRefIsNotNull(Channel channel, SenderIdentityKind kind,
 			String identifier);
 
+	long countByTenantIdAndChannelAndKindAndStatusNot(UUID tenantId, Channel channel, SenderIdentityKind kind,
+			SenderIdentityStatus status);
+
 	List<SenderIdentity> findTop50ByStatusAndNextCheckAtBeforeOrderByNextCheckAt(SenderIdentityStatus status,
 			Instant cutoff);
 }

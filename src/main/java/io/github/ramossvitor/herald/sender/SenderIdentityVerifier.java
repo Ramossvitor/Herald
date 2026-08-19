@@ -27,7 +27,7 @@ public class SenderIdentityVerifier {
 
 	/** Roughly three days on the ladder below — DNS that has not landed by
 	 * then was misconfigured, not slow. */
-	static final int MAX_CHECKS = 80;
+	public static final int MAX_CHECKS = 80;
 
 	private final SenderIdentityRepository identities;
 	private final ResendClient resend;
@@ -52,7 +52,13 @@ public class SenderIdentityVerifier {
 		List<SenderIdentity> due = identities.findTop50ByStatusAndNextCheckAtBeforeOrderByNextCheckAt(
 				SenderIdentityStatus.VERIFYING, clock.instant());
 		for (SenderIdentity identity : due) {
-			check(identity);
+			try {
+				check(identity);
+			}
+			catch (RuntimeException ex) {
+				// One unhappy row must not cost the rest of the batch its tick.
+				log.error("sender domain check failed: {}", identity.getIdentifier(), ex);
+			}
 		}
 		return due.size();
 	}
@@ -69,8 +75,7 @@ public class SenderIdentityVerifier {
 					return;
 				}
 				case FAILED -> {
-					identity.markFailed("provider reported failed verification", now);
-					identities.save(identity);
+					fail(identity, "provider reported failed verification", now);
 					log.warn("sender domain failed verification: {}", identity.getIdentifier());
 					return;
 				}
@@ -80,12 +85,50 @@ public class SenderIdentityVerifier {
 			}
 		}
 		if (identity.getCheckAttempts() + 1 >= MAX_CHECKS) {
-			identity.markFailed("verification timed out", now);
+			fail(identity, "verification timed out" + sinceLastProviderError(outcome), now);
+			return;
 		}
-		else {
-			identity.recordCheck(now.plus(nextDelay(identity.getCheckAttempts() + 1)), now);
+		// Carry the provider's last word forward: without it a domain that
+		// failed eighty calls ends as a bare timeout that explains nothing.
+		identity.recordCheck(now.plus(nextDelay(identity.getCheckAttempts() + 1)), now,
+				describe(outcome));
+		identities.save(identity);
+	}
+
+	/**
+	 * The row stays — the tenant has to be able to read why it failed — but the
+	 * provider registration behind it does not. Dropping it frees the slot in
+	 * the operator's provider account and, because the system-wide claim is
+	 * keyed on a non-null provider_ref, releases the domain for whoever can
+	 * actually prove they own it.
+	 */
+	private void fail(SenderIdentity identity, String error, Instant now) {
+		String providerRef = identity.getProviderRef();
+		identity.markFailed(error, now);
+		if (providerRef != null) {
+			ResendClient.Outcome outcome = resend.deleteDomain(providerRef);
+			if (outcome.transportFailed() || outcome.httpStatus() >= 500) {
+				// Keep the ref so a later attempt can still release it.
+				log.warn("could not release failed sender domain {} upstream: {}",
+						identity.getIdentifier(), describe(outcome));
+			}
+			else {
+				identity.releaseProviderRegistration();
+			}
 		}
 		identities.save(identity);
+	}
+
+	private static String describe(ResendClient.Outcome outcome) {
+		if (outcome.transportFailed()) {
+			return "transport: " + outcome.transportError();
+		}
+		return outcome.httpStatus() >= 400 ? "provider answered http " + outcome.httpStatus() : null;
+	}
+
+	private static String sinceLastProviderError(ResendClient.Outcome outcome) {
+		String detail = describe(outcome);
+		return detail == null ? "" : " (last: " + detail + ")";
 	}
 
 	/** Escalating ladder: quick at first, hourly once it is clearly slow DNS. */

@@ -4,6 +4,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.UUID;
@@ -31,6 +32,7 @@ import com.github.tomakehurst.wiremock.client.WireMock;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
 import com.github.tomakehurst.wiremock.stubbing.Scenario;
 
+import io.github.ramossvitor.herald.sender.SenderIdentityService;
 import io.github.ramossvitor.herald.sender.SenderIdentityVerifier;
 
 /**
@@ -190,6 +192,125 @@ class SenderIdentityIntegrationTest {
 	}
 
 	@Test
+	void aVerificationTheProviderRefusedDoesNotStartThePoller() throws Exception {
+		RESEND.stubFor(WireMock.post(WireMock.urlEqualTo("/domains"))
+				.willReturn(WireMock.okJson("{\"id\":\"dom_9\",\"status\":\"not_started\",\"records\":[]}")));
+		RESEND.stubFor(WireMock.post(WireMock.urlEqualTo("/domains/dom_9/verify"))
+				.willReturn(WireMock.aResponse().withStatus(500)));
+
+		Provisioned tenant = provisionTenant();
+		String id = register(tenant, "refused.example");
+
+		mvc.perform(post("/v1/sender-identities/" + id + "/verify").header("Authorization", tenant.bearer()))
+				.andExpect(status().isBadGateway())
+				.andExpect(jsonPath("$.type").value("/errors/provider-unavailable"));
+
+		// Still PENDING, so the tenant can just ask again — rather than three
+		// days of polling a check the provider never accepted.
+		assertStatus(tenant, id, "PENDING");
+	}
+
+	@Test
+	void verificationGivesUpAfterTheLadderRunsOutAndReleasesTheDomain() throws Exception {
+		RESEND.stubFor(WireMock.post(WireMock.urlEqualTo("/domains"))
+				.willReturn(WireMock.okJson("{\"id\":\"dom_10\",\"status\":\"not_started\",\"records\":[]}")));
+		RESEND.stubFor(WireMock.post(WireMock.urlEqualTo("/domains/dom_10/verify")).willReturn(WireMock.okJson("{}")));
+		RESEND.stubFor(WireMock.get(WireMock.urlEqualTo("/domains/dom_10"))
+				.willReturn(WireMock.okJson("{\"id\":\"dom_10\",\"status\":\"pending\"}")));
+		RESEND.stubFor(WireMock.delete(WireMock.urlEqualTo("/domains/dom_10")).willReturn(WireMock.okJson("{}")));
+
+		Provisioned tenant = provisionTenant();
+		String id = register(tenant, "never-lands.example");
+		mvc.perform(post("/v1/sender-identities/" + id + "/verify").header("Authorization", tenant.bearer()))
+				.andExpect(status().isAccepted());
+
+		jdbc.update("update sender_identities set check_attempts = ?, next_check_at = now() - interval '1 second' "
+				+ "where id = ?", SenderIdentityVerifier.MAX_CHECKS - 1, UUID.fromString(id));
+		verifier.runOnce();
+
+		assertStatus(tenant, id, "FAILED");
+		mvc.perform(get("/v1/sender-identities").header("Authorization", tenant.bearer()))
+				.andExpect(jsonPath("$[?(@.id == '%s')].lastError".formatted(id)).value("verification timed out"));
+
+		// The row stays so the tenant can read why, but the provider slot and
+		// the system-wide claim on the domain are given back.
+		RESEND.verify(WireMock.deleteRequestedFor(WireMock.urlEqualTo("/domains/dom_10")));
+		assertThat(jdbc.queryForObject("select provider_ref from sender_identities where id = ?", String.class,
+				UUID.fromString(id))).isNull();
+
+		// And the tenant may try again once DNS is fixed.
+		RESEND.stubFor(WireMock.post(WireMock.urlEqualTo("/domains"))
+				.willReturn(WireMock.okJson("{\"id\":\"dom_11\",\"status\":\"not_started\",\"records\":[]}")));
+		mvc.perform(post("/v1/sender-identities")
+				.header("Authorization", tenant.bearer())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"domain\":\"never-lands.example\"}"))
+				.andExpect(status().isCreated());
+	}
+
+	@Test
+	void theTenantsOwnConfiguredSenderCannotBeDeletedFromUnderIt() throws Exception {
+		Provisioned tenant = provisionTenant();
+		// provisionTenant configures "Acme <mail@acme.example>", so this is the
+		// identity every default send resolves to.
+		String id = identityId(tenant, "acme.example");
+
+		mvc.perform(delete("/v1/sender-identities/" + id).header("Authorization", tenant.bearer()))
+				.andExpect(status().isConflict());
+
+		// Still able to send, which is the whole point of refusing.
+		mvc.perform(post("/v1/emails")
+				.header("Authorization", tenant.bearer())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"to\":\"a@example.com\",\"subject\":\"Hello\",\"html\":\"<p>Hi</p>\",\"text\":\"Hi\"}"))
+				.andExpect(status().isAccepted());
+
+		// The operator can still remove it — they can also hand over a replacement.
+		mvc.perform(delete("/admin/v1/tenants/" + tenant.tenantId + "/sender-identities/" + id)
+				.header("Authorization", ADMIN))
+				.andExpect(status().isNoContent());
+	}
+
+	@Test
+	void theSharedRootItselfIsNeverRegistrable() throws Exception {
+		Provisioned tenant = provisionTenant();
+		// Not even for the operator: an identity on the bare root covers every
+		// other tenant's slug@root address.
+		mvc.perform(post("/admin/v1/tenants/" + tenant.tenantId + "/sender-identities")
+				.header("Authorization", ADMIN)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"domain\":\"send.test.example\"}"))
+				.andExpect(status().isConflict());
+	}
+
+	@Test
+	void unverifiedDomainsAreCappedPerTenant() throws Exception {
+		RESEND.stubFor(WireMock.post(WireMock.urlEqualTo("/domains"))
+				.willReturn(WireMock.okJson("{\"id\":\"dom_cap\",\"status\":\"not_started\",\"records\":[]}")));
+		Provisioned tenant = provisionTenant();
+		for (int i = 0; i < SenderIdentityService.MAX_UNVERIFIED_DOMAINS; i++) {
+			register(tenant, "capped-" + i + ".example");
+		}
+
+		// Otherwise a registration is a free, permanent, system-wide claim on
+		// any domain name a tenant cares to type.
+		mvc.perform(post("/v1/sender-identities")
+				.header("Authorization", tenant.bearer())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"domain\":\"one-too-many.example\"}"))
+				.andExpect(status().isConflict());
+	}
+
+	@Test
+	void registeringForAnUnknownTenantIsANotFound() throws Exception {
+		mvc.perform(post("/admin/v1/tenants/" + UUID.randomUUID() + "/sender-identities")
+				.header("Authorization", ADMIN)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"domain\":\"nobody.example\"}"))
+				.andExpect(status().isNotFound());
+	}
+
+	@Test
 	void aDomainCanOnlyBeClaimedOnce() throws Exception {
 		RESEND.stubFor(WireMock.post(WireMock.urlEqualTo("/domains"))
 				.willReturn(WireMock.okJson("{\"id\":\"dom_4\",\"status\":\"not_started\",\"records\":[]}")));
@@ -342,6 +463,18 @@ class SenderIdentityIntegrationTest {
 	private void forceCheckDue(String id) {
 		jdbc.update("update sender_identities set next_check_at = now() - interval '1 second' where id = ?",
 				UUID.fromString(id));
+	}
+
+	private String identityId(Provisioned tenant, String identifier) throws Exception {
+		MvcResult result = mvc.perform(get("/v1/sender-identities").header("Authorization", tenant.bearer()))
+				.andExpect(status().isOk())
+				.andReturn();
+		for (JsonNode identity : json.readTree(result.getResponse().getContentAsString())) {
+			if (identifier.equals(identity.get("identifier").asText())) {
+				return identity.get("id").asText();
+			}
+		}
+		throw new AssertionError("no identity " + identifier + " for tenant " + tenant.tenantId);
 	}
 
 	private void assertStatus(Provisioned tenant, String id, String expected) throws Exception {

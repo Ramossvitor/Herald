@@ -56,7 +56,7 @@ public class SenderIdentityController {
 	@DeleteMapping("/{id}")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void delete(@PathVariable UUID id, @AuthenticationPrincipal TenantPrincipal principal) {
-		service.delete(require(id, principal.tenantId()));
+		service.delete(require(id, principal.tenantId()), false);
 	}
 
 	private SenderIdentity require(UUID id, UUID tenantId) {

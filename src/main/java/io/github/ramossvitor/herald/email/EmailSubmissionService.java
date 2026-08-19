@@ -67,9 +67,11 @@ public class EmailSubmissionService {
 						"tenant has no email settings — provisioning bug: " + tenantId));
 
 		// Before the quota check on purpose: an unusable sender is a caller
-		// mistake, and must never surface as a quota rejection.
-		String from = request.from() != null ? request.from() : settings.getFromAddress();
-		senderIdentities.requireUsable(tenantId, from);
+		// mistake, and must never surface as a quota rejection. The canonical
+		// form comes back out and is what gets stored and sent — sending the
+		// caller's spelling would mean verifying one address and mailing another.
+		String from = senderIdentities.resolveUsable(tenantId,
+				request.from() != null ? request.from() : settings.getFromAddress());
 
 		String canonicalRecipient = EmailAddresses.canonicalize(request.to());
 		quotas.check(settings, canonicalRecipient, request.limitKeysOrEmpty());

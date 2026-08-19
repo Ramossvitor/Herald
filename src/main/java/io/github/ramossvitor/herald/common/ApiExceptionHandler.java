@@ -3,6 +3,8 @@ package io.github.ramossvitor.herald.common;
 import java.net.URI;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
@@ -21,6 +23,8 @@ import io.github.ramossvitor.herald.sender.SenderNotVerifiedException;
  */
 @RestControllerAdvice
 public class ApiExceptionHandler {
+
+	private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
 	@ExceptionHandler(MethodArgumentNotValidException.class)
 	public ProblemDetail onValidationFailure(MethodArgumentNotValidException ex) {
@@ -80,10 +84,14 @@ public class ApiExceptionHandler {
 
 	@ExceptionHandler(ProviderUnavailableException.class)
 	public ProblemDetail onProviderUnavailable(ProviderUnavailableException ex) {
+		// The message carries the provider's status and, on a transport
+		// failure, a JDK exception naming hosts and proxies. That belongs in
+		// the log, not in a tenant's response body.
+		log.warn("provider call failed: {}", ex.getMessage());
 		ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.BAD_GATEWAY);
 		problem.setType(URI.create("/errors/provider-unavailable"));
 		problem.setTitle("Email provider unavailable");
-		problem.setDetail(ex.getMessage());
+		problem.setDetail("the email provider could not be reached; try again shortly");
 		return problem;
 	}
 

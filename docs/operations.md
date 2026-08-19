@@ -19,7 +19,9 @@ back into that zone, wait for it to read `verified`, then set
 new tenant is created with a verified address of its own on it —
 `Acme App <acme@send.example.com>` — with no DNS work on the client's side.
 Each tenant holds exactly one mailbox there, never the domain, so no tenant
-can send as another. Leave the variable unset to keep the tier off; tenant
+can send as another — the root itself is not registrable as an identity by
+anyone, you included, because one identity on it would cover every tenant's
+address at once. Leave the variable unset to keep the tier off; tenant
 creation then requires an explicit `fromAddress`.
 
 **Custom domains — self-service.** The tenant registers its own domain, gets
@@ -44,6 +46,18 @@ hourly later) and gives up after roughly three days with
 domain is accepted as `from`; until then, sending from it is a `422` with
 type `/errors/sender-not-verified`.
 
+A registration that ends FAILED keeps its row — the tenant needs to read why —
+but gives the domain back: the provider registration behind it is deleted, so
+the name is free for whoever can prove they own it, and the tenant can register
+it again once DNS is fixed. A tenant may hold at most ten domains that are not
+verified yet, which is what stops registrations being used to squat names or to
+drain your provider account's domain allowance.
+
+A `from` is stored and sent in a canonical form, never as the caller spelled
+it: a display name is quoted when RFC 5322 needs it, and anything with two
+readings — a second `<addr>`, trailing text, a control character — is refused
+outright rather than verified on one address and mailed from another.
+
 **A dedicated subdomain for one tenant** (isolating a noisy or high-volume
 sender's reputation from the shared pool) is the same flow driven by you,
 since the DNS is yours — tenants are refused subdomains of the shared root:
@@ -54,6 +68,11 @@ curl -sS -X POST "$HERALD/admin/v1/tenants/<tenant-id>/sender-identities" \
   -d '{"domain":"acme.send.example.com"}'
 # publish the returned records in your own zone, then .../verify
 ```
+
+Setting a tenant's `fromAddress` also trusts that domain for it, promoting an
+existing row for the same domain if there is one — so an identity that failed
+self-service verification becomes usable the moment you vouch for it. Editing
+only the limits leaves identities alone.
 
 **Identities you configured by hand** — including every tenant that existed
 before this feature — are stored with `provider_ref` NULL, meaning Herald
@@ -70,8 +89,8 @@ FROM sender_identities WHERE tenant_id = '<tenant-id>';
 ## Provisioning a tenant
 
 ```bash
-# 1. Create the tenant. Omit fromAddress to put it on the shared tier;
-#    pass one to use a domain you have verified at the provider yourself.
+# 1. Create the tenant. Omit fromAddress (or leave it blank) to put it on the
+#    shared tier; pass one to use a domain you verified at the provider yourself.
 curl -sS -X POST "$HERALD/admin/v1/tenants" -H "$ADMIN" -H "Content-Type: application/json" -d '{
   "slug": "acme",
   "name": "Acme App",

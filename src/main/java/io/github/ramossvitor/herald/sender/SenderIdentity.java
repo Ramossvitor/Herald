@@ -103,10 +103,21 @@ public class SenderIdentity {
 		this.updatedAt = now;
 	}
 
-	public void recordCheck(Instant nextCheckAt, Instant now) {
+	public void recordCheck(Instant nextCheckAt, Instant now, String error) {
 		this.checkAttempts++;
 		this.nextCheckAt = nextCheckAt;
+		this.lastError = error;
 		this.updatedAt = now;
+	}
+
+	/**
+	 * Forgets the provider registration while keeping the row. Used when a
+	 * failed domain is dropped upstream: the tenant still sees what went wrong,
+	 * but the row no longer claims the domain system-wide.
+	 */
+	public void releaseProviderRegistration() {
+		this.providerRef = null;
+		this.dnsRecords = null;
 	}
 
 	public void markVerified(Instant now) {

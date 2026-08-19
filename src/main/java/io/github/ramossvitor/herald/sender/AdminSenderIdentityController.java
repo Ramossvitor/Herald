@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import io.github.ramossvitor.herald.common.NotFoundException;
+import io.github.ramossvitor.herald.tenant.TenantRepository;
 import jakarta.validation.Valid;
 
 /**
@@ -27,16 +28,24 @@ public class AdminSenderIdentityController {
 
 	private final SenderIdentityService service;
 	private final SenderIdentityRepository identities;
+	private final TenantRepository tenants;
 
-	public AdminSenderIdentityController(SenderIdentityService service, SenderIdentityRepository identities) {
+	public AdminSenderIdentityController(SenderIdentityService service, SenderIdentityRepository identities,
+			TenantRepository tenants) {
 		this.service = service;
 		this.identities = identities;
+		this.tenants = tenants;
 	}
 
 	@PostMapping
 	@ResponseStatus(HttpStatus.CREATED)
 	public SenderIdentityResponse register(@PathVariable UUID tenantId,
 			@Valid @RequestBody RegisterDomainRequest request) {
+		// Without this the tenant FK fails instead, which is a 500 where every
+		// other admin route answers 404.
+		if (!tenants.existsById(tenantId)) {
+			throw new NotFoundException("tenant not found: " + tenantId);
+		}
 		return SenderIdentityResponse.from(service.registerCustomDomain(tenantId, request.domain(), true));
 	}
 
@@ -55,7 +64,9 @@ public class AdminSenderIdentityController {
 	@DeleteMapping("/{id}")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void delete(@PathVariable UUID tenantId, @PathVariable UUID id) {
-		service.delete(require(id, tenantId));
+		// The operator may drop a tenant's configured sender; they are also the
+		// only one who can hand it a replacement.
+		service.delete(require(id, tenantId), true);
 	}
 
 	private SenderIdentity require(UUID id, UUID tenantId) {
