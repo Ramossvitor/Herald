@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import io.github.ramossvitor.herald.email.QuotaExceededException;
+import io.github.ramossvitor.herald.sender.ProviderUnavailableException;
 import io.github.ramossvitor.herald.sender.SenderNotVerifiedException;
 
 /**
@@ -73,6 +74,15 @@ public class ApiExceptionHandler {
 		ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.CONFLICT);
 		problem.setType(URI.create("/errors/conflict"));
 		problem.setTitle("Conflict");
+		problem.setDetail(ex.getMessage());
+		return problem;
+	}
+
+	@ExceptionHandler(ProviderUnavailableException.class)
+	public ProblemDetail onProviderUnavailable(ProviderUnavailableException ex) {
+		ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.BAD_GATEWAY);
+		problem.setType(URI.create("/errors/provider-unavailable"));
+		problem.setTitle("Email provider unavailable");
 		problem.setDetail(ex.getMessage());
 		return problem;
 	}
