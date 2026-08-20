@@ -1,8 +1,12 @@
 package io.github.ramossvitor.herald;
 
+import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.get;
 import static com.github.tomakehurst.wiremock.client.WireMock.okJson;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlMatching;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -18,8 +22,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -31,9 +33,6 @@ import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
 
 import io.github.ramossvitor.herald.email.EmailSubmissionService;
 import io.github.ramossvitor.herald.email.SendEmailRequest;
-import io.github.ramossvitor.herald.outbox.ChannelProvider;
-import io.github.ramossvitor.herald.outbox.Classification;
-import io.github.ramossvitor.herald.outbox.Message;
 import io.github.ramossvitor.herald.outbox.MessageRepository;
 import io.github.ramossvitor.herald.outbox.MessageStatus;
 import io.github.ramossvitor.herald.outbox.OutboxWorker;
@@ -41,69 +40,44 @@ import io.github.ramossvitor.herald.quota.QuotaExceededException;
 import io.github.ramossvitor.herald.sender.Channel;
 import io.github.ramossvitor.herald.tenant.Tenant;
 import io.github.ramossvitor.herald.tenant.admin.TenantAdminService;
+import io.github.ramossvitor.herald.whatsapp.WhatsAppAdminService;
 
 /**
  * The point of the polymorphic outbox: two channels sharing the claim, retry
- * and recovery machinery without sharing budgets or failure. A second channel
- * is stubbed here because the real one (WhatsApp) is bring-your-own and cannot
- * be exercised without a tenant's own credentials.
+ * and recovery machinery without sharing budgets or failure.
+ *
+ * Both providers here are the real ones, each pointed at its own WireMock. An
+ * earlier version stubbed the second channel because it did not exist yet;
+ * keeping the stub now would only prove that a fake behaves.
  */
 @SpringBootTest
-@Import({ TestcontainersConfiguration.class, ChannelIsolationIntegrationTest.StubWhatsAppConfig.class })
+@Import(TestcontainersConfiguration.class)
 @TestPropertySource(properties = {
 		"herald.resend.api-key=re_test_fake",
+		"herald.secret-key=aGVyYWxkLXRlc3Qta2V5LTAxMjM0NTY3ODlhYmNkZWY=",
 		"herald.outbox.poll-interval=1h",
 		"herald.outbox.send-interval=0ms",
+		"herald.whatsapp.send-interval=0ms",
+		"herald.whatsapp.template-sync-interval=1h",
 })
 class ChannelIsolationIntegrationTest {
 
 	private static final WireMockServer RESEND = new WireMockServer(WireMockConfiguration.wireMockConfig().dynamicPort());
+	private static final WireMockServer META = new WireMockServer(WireMockConfiguration.wireMockConfig().dynamicPort());
 	private static final AtomicInteger SLUGS = new AtomicInteger();
 
 	@DynamicPropertySource
-	static void resendEndpoint(DynamicPropertyRegistry registry) {
+	static void providerEndpoints(DynamicPropertyRegistry registry) {
 		RESEND.start();
+		META.start();
 		registry.add("herald.resend.base-url", RESEND::baseUrl);
+		registry.add("herald.whatsapp.base-url", META::baseUrl);
 	}
 
 	@AfterAll
 	static void stopWireMock() {
 		RESEND.stop();
-	}
-
-	/** A stand-in for the WhatsApp provider, steerable per test. */
-	static class StubWhatsAppProvider implements ChannelProvider {
-
-		boolean configured = true;
-		Classification classification = Classification.SUCCESS;
-		int sendCalls = 0;
-
-		@Override
-		public Channel channel() {
-			return Channel.WHATSAPP;
-		}
-
-		@Override
-		public boolean configured() {
-			return configured;
-		}
-
-		@Override
-		public Attempt send(Message message) {
-			sendCalls++;
-			return classification == Classification.SUCCESS
-					? Attempt.success("wamid.stub")
-					: Attempt.failed(classification, "stubbed " + classification, null);
-		}
-	}
-
-	@TestConfiguration(proxyBeanMethods = false)
-	static class StubWhatsAppConfig {
-
-		@Bean
-		StubWhatsAppProvider stubWhatsAppProvider() {
-			return new StubWhatsAppProvider();
-		}
+		META.stop();
 	}
 
 	@Autowired
@@ -113,13 +87,13 @@ class ChannelIsolationIntegrationTest {
 	private EmailSubmissionService submissions;
 
 	@Autowired
+	private WhatsAppAdminService whatsappAdmin;
+
+	@Autowired
 	private OutboxWorker worker;
 
 	@Autowired
 	private MessageRepository messages;
-
-	@Autowired
-	private StubWhatsAppProvider whatsapp;
 
 	@Autowired
 	private JdbcTemplate jdbc;
@@ -127,18 +101,16 @@ class ChannelIsolationIntegrationTest {
 	@BeforeEach
 	void reset() {
 		RESEND.resetAll();
+		META.resetAll();
 		jdbc.update("delete from messages");
-		whatsapp.configured = true;
-		whatsapp.classification = Classification.SUCCESS;
-		whatsapp.sendCalls = 0;
 	}
 
 	@Test
 	void oneChannelFailingDoesNotHoldUpTheOther() {
 		RESEND.stubFor(post(urlEqualTo("/emails")).willReturn(okJson("{\"id\":\"re_ok\"}")));
-		whatsapp.classification = Classification.UNAVAILABLE;
+		META.stubFor(post(urlPathMatching(".*/messages")).willReturn(aResponse().withStatus(503)));
 
-		Tenant tenant = newTenant(500);
+		Tenant tenant = newTenantWithWhatsApp(500);
 		UUID email = submitEmail(tenant, "player@example.com");
 		UUID chat = insertWhatsAppMessage(tenant, "+5511999990000", null);
 
@@ -150,29 +122,11 @@ class ChannelIsolationIntegrationTest {
 	}
 
 	@Test
-	void anUnconfiguredChannelQueuesWithoutTouchingTheOthers() {
-		RESEND.stubFor(post(urlEqualTo("/emails")).willReturn(okJson("{\"id\":\"re_ok\"}")));
-		whatsapp.configured = false;
-
-		Tenant tenant = newTenant(500);
-		UUID email = submitEmail(tenant, "player@example.com");
-		UUID chat = insertWhatsAppMessage(tenant, "+5511999990000", null);
-
-		assertThat(worker.runOnce()).isEqualTo(1);
-
-		assertThat(messages.findById(email).orElseThrow().getStatus()).isEqualTo(MessageStatus.SENT);
-		// Queued, never attempted: no provider call, no attempt burned.
-		Message queued = messages.findById(chat).orElseThrow();
-		assertThat(queued.getStatus()).isEqualTo(MessageStatus.PENDING);
-		assertThat(queued.getAttemptCount()).isZero();
-		assertThat(whatsapp.sendCalls).isZero();
-	}
-
-	@Test
 	void aChannelCanBeDrainedOnItsOwn() {
 		RESEND.stubFor(post(urlEqualTo("/emails")).willReturn(okJson("{\"id\":\"re_ok\"}")));
+		stubWhatsAppSend("wamid.one");
 
-		Tenant tenant = newTenant(500);
+		Tenant tenant = newTenantWithWhatsApp(500);
 		UUID email = submitEmail(tenant, "player@example.com");
 		UUID chat = insertWhatsAppMessage(tenant, "+5511999990000", null);
 
@@ -264,6 +218,23 @@ class ChannelIsolationIntegrationTest {
 				"Acme <mail@acme.example>", dailyLimit, recipientCooldownSeconds);
 	}
 
+	/** A tenant whose WhatsApp credentials are registered and proven, so the
+	 * dispatch path has something to send under. */
+	private Tenant newTenantWithWhatsApp(int dailyLimit) {
+		Tenant tenant = newTenant(dailyLimit);
+		META.stubFor(get(urlMatching(".*/15550001111\\?.*"))
+				.willReturn(okJson("{\"id\":\"15550001111\",\"display_phone_number\":\"+1 555 000 1111\"}")));
+		META.stubFor(get(urlPathMatching(".*/message_templates")).willReturn(okJson("{\"data\":[]}")));
+		whatsappAdmin.register(tenant.getId(), new WhatsAppAdminService.Credentials(
+				"15550001111", "waba-" + tenant.getId(), "EAAtoken", "appsecret", dailyLimit, 0));
+		return tenant;
+	}
+
+	private void stubWhatsAppSend(String wamid) {
+		META.stubFor(post(urlPathMatching(".*/messages")).willReturn(okJson(
+				"{\"messaging_product\":\"whatsapp\",\"messages\":[{\"id\":\"" + wamid + "\"}]}")));
+	}
+
 	private UUID submitEmail(Tenant tenant, String to) {
 		return submitEmail(tenant, to, null);
 	}
@@ -276,13 +247,15 @@ class ChannelIsolationIntegrationTest {
 				.getId();
 	}
 
-	/** No WhatsApp submission path exists yet; the row is what the worker sees. */
+	/** Seeded directly: these tests are about the outbox, not about how a
+	 * WhatsApp row comes to exist. */
 	private UUID insertWhatsAppMessage(Tenant tenant, String recipient, String idempotencyKey, String... limitKeys) {
 		UUID id = UUID.randomUUID();
 		jdbc.update("""
 				insert into messages (id, tenant_id, channel, idempotency_key, recipient, recipient_canonical,
 				                      sender, payload, limit_keys)
-				values (?, ?, 'WHATSAPP', ?, ?, ?, '15550001111', '{"template":"order_update"}'::jsonb,
+				values (?, ?, 'WHATSAPP', ?, ?, ?, '15550001111',
+				        '{"template":"order_update","language":"pt_BR","params":[]}'::jsonb,
 				        cast(? as text[]))
 				""", id, tenant.getId(), idempotencyKey, recipient, recipient, arrayLiteral(limitKeys));
 		return id;

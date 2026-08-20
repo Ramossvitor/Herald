@@ -139,6 +139,18 @@ public class Message {
 		return value instanceof String text ? text : null;
 	}
 
+	/**
+	 * Empty when the key is absent or is not a list; non-string entries are
+	 * rendered rather than dropped, so a payload written by an older version
+	 * cannot silently shorten an argument list and shift every value after it.
+	 */
+	public List<String> payloadTextList(String key) {
+		if (!(payload.get(key) instanceof List<?> values)) {
+			return List.of();
+		}
+		return values.stream().map(String::valueOf).toList();
+	}
+
 	public UUID getId() {
 		return id;
 	}
