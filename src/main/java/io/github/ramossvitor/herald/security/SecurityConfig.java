@@ -23,6 +23,10 @@ public class SecurityConfig {
 						// keyed API, it doesn't grant access to it.
 						.requestMatchers("/actuator/health", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html")
 						.permitAll()
+						// Meta has no API key to send. The endpoint authenticates
+						// every request itself, by HMAC over the raw body keyed
+						// with the tenant's app secret — open here, not unguarded.
+						.requestMatchers("/webhooks/whatsapp").permitAll()
 						.requestMatchers("/actuator/**").hasRole("ADMIN")
 						.requestMatchers("/admin/v1/**").hasRole("ADMIN")
 						.anyRequest().hasRole("TENANT"))

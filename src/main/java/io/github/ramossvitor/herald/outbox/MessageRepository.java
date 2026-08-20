@@ -20,6 +20,11 @@ public interface MessageRepository extends JpaRepository<Message, UUID> {
 
 	Optional<Message> findByIdAndTenantIdAndChannel(UUID id, UUID tenantId, Channel channel);
 
+	/** How a provider's delivery receipt finds the row it is about. Scoped to
+	 * the tenant so one cannot be handed another's message by guessing an id. */
+	Optional<Message> findByTenantIdAndChannelAndProviderMessageId(UUID tenantId, Channel channel,
+			String providerMessageId);
+
 	/** Daily-window counter. Counts accepted rows regardless of status: a
 	 * message that later failed still consumed provider attempts. */
 	@Query("select count(m) from Message m "

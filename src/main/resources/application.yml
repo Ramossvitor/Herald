@@ -35,6 +35,10 @@ management:
 herald:
   # Empty admin key disables the /admin/v1/** surface entirely (fail closed).
   admin-api-key: ${ADMIN_API_KEY:}
+  # Base64 256-bit key (openssl rand -base64 32). Encrypts the provider
+  # credentials tenants hand over. Empty pauses WhatsApp rather than storing
+  # them in the clear. Losing it means re-collecting every tenant's token.
+  secret-key: ${HERALD_SECRET_KEY:}
   email:
     # The operator-owned domain every tenant gets a free sending address on.
     # Register and verify it once at the provider, publish its DNS records, then
@@ -47,11 +51,25 @@ herald:
     api-key: ${RESEND_API_KEY:}
     connect-timeout: 5s
     read-timeout: 10s
+  whatsapp:
+    base-url: https://graph.facebook.com
+    # Bump deliberately: Graph API versions live about two years.
+    api-version: v23.0
+    connect-timeout: 5s
+    read-timeout: 10s
+    send-interval: 50ms
+    template-sync-interval: PT30M
+    # Answers Meta's webhook subscription handshake. One value for the whole
+    # instance: that GET says nothing about which tenant is subscribing, so it
+    # cannot be per tenant. Every real notification is still authenticated by
+    # the tenant's own app secret. Empty refuses the handshake.
+    webhook-verify-token: ${HERALD_WHATSAPP_VERIFY_TOKEN:}
   outbox:
     poll-interval: 3s
     batch-size: 10
     max-attempts: 8
     # Resend's free tier allows ~2 requests/second; pace sends well under that.
+    # Channels whose provider allows more override this (ChannelProvider#sendInterval).
     send-interval: 600ms
 
 ---

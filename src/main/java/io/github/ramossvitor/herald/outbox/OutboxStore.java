@@ -82,9 +82,16 @@ public class OutboxStore {
 	}
 
 	/**
-	 * A row stuck in SENDING means a worker died between claim and record. The
-	 * provider idempotency key makes re-sending it safe. Channel-agnostic on
-	 * purpose: a crash abandons rows on whatever channel was in flight.
+	 * A row stuck in SENDING means a worker died between claim and record.
+	 * Channel-agnostic on purpose: a crash abandons rows on whatever channel was
+	 * in flight, and re-sending is the lesser risk on all of them.
+	 *
+	 * What re-sending costs differs by channel. On email the message id is the
+	 * provider's idempotency key, so the second send collapses into the first.
+	 * Meta's Cloud API takes no such key, so a recovered WhatsApp row can arrive
+	 * twice and be billed twice. That is deliberate: the alternative is failing a
+	 * message that may never have been sent at all, and a notification nobody
+	 * receives is worse than one received twice.
 	 */
 	@Transactional
 	public int releaseStuckSending(Duration olderThan) {

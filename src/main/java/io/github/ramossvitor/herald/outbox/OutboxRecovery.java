@@ -9,9 +9,13 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * Returns SENDING rows abandoned by a crashed worker to the queue. Ten
- * minutes is far beyond any legitimate pass, and the provider idempotency key
- * makes the re-send safe.
+ * Returns SENDING rows abandoned by a crashed worker to the queue. Ten minutes
+ * is far beyond any legitimate pass.
+ *
+ * The re-send is free on email, where the message id is the provider's
+ * idempotency key, and can duplicate on WhatsApp, where Meta offers no
+ * equivalent — see {@link OutboxStore#releaseStuckSending} for why that is
+ * still the right trade.
  */
 @Component
 @Lazy(false) // see OutboxWorker
