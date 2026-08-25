@@ -11,6 +11,7 @@ import io.github.ramossvitor.herald.outbox.MessageRepository;
 import io.github.ramossvitor.herald.quota.QuotaService;
 import io.github.ramossvitor.herald.quota.TenantLimits;
 import io.github.ramossvitor.herald.sender.SenderIdentityService;
+import io.github.ramossvitor.herald.suppression.SuppressionService;
 import io.github.ramossvitor.herald.tenant.TenantEmailSettings;
 import io.github.ramossvitor.herald.tenant.TenantEmailSettingsRepository;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -32,15 +33,18 @@ public class EmailSubmissionService {
 	private final TenantEmailSettingsRepository emailSettings;
 	private final QuotaService quotas;
 	private final SenderIdentityService senderIdentities;
+	private final SuppressionService suppressions;
 	private final Clock clock;
 	private final MeterRegistry metrics;
 
 	public EmailSubmissionService(MessageRepository messages, TenantEmailSettingsRepository emailSettings,
-			QuotaService quotas, SenderIdentityService senderIdentities, Clock clock, MeterRegistry metrics) {
+			QuotaService quotas, SenderIdentityService senderIdentities, SuppressionService suppressions, Clock clock,
+			MeterRegistry metrics) {
 		this.messages = messages;
 		this.emailSettings = emailSettings;
 		this.quotas = quotas;
 		this.senderIdentities = senderIdentities;
+		this.suppressions = suppressions;
 		this.clock = clock;
 		this.metrics = metrics;
 	}
@@ -77,6 +81,13 @@ public class EmailSubmissionService {
 				request.from() != null ? request.from() : settings.getFromAddress());
 
 		String canonicalRecipient = EmailAddresses.canonicalize(request.to());
+
+		// Also before the quota check, and for the same reason as the sender:
+		// a dead address is a caller mistake, not a budget. Reporting it as a
+		// quota rejection would both mislead and disturb the contractual order
+		// the quota reasons are documented in.
+		suppressions.requireNotSuppressed(tenantId, canonicalRecipient);
+
 		quotas.check(limitsFor(settings), canonicalRecipient, request.limitKeysOrEmpty());
 
 		Message message = messages.save(new Message(

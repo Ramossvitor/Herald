@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import io.github.ramossvitor.herald.quota.QuotaExceededException;
 import io.github.ramossvitor.herald.sender.ProviderUnavailableException;
 import io.github.ramossvitor.herald.sender.SenderNotVerifiedException;
+import io.github.ramossvitor.herald.suppression.SuppressedRecipientException;
 
 /**
  * Every error leaves the API as an RFC 9457 problem document. The {@code type}
@@ -61,6 +62,18 @@ public class ApiExceptionHandler {
 		problem.setType(URI.create("/errors/sender-not-verified"));
 		problem.setTitle("Sender not verified");
 		problem.setProperty("from", ex.from());
+		return problem;
+	}
+
+	@ExceptionHandler(SuppressedRecipientException.class)
+	public ProblemDetail onSuppressedRecipient(SuppressedRecipientException ex) {
+		ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.UNPROCESSABLE_CONTENT);
+		problem.setType(URI.create("/errors/recipient-suppressed"));
+		problem.setTitle("Recipient suppressed");
+		problem.setDetail("this address bounced or reported spam and will not be mailed again "
+				+ "until the suppression is lifted");
+		problem.setProperty("recipient", ex.recipient());
+		problem.setProperty("reason", ex.reason().wireName());
 		return problem;
 	}
 

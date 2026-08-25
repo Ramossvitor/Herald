@@ -125,6 +125,71 @@ curl -sS "$HERALD/v1/emails/<message-id>" -H "Authorization: Bearer hrl_live_...
 # → {"status":"SENT","providerMessageId":"...","sentAt":"..."}  within seconds
 ```
 
+## Delivery events and suppressions
+
+Until the webhook is set up, `SENT` is all Herald knows: the provider accepted
+the message. Whether it arrived, bounced or was reported as spam only comes
+back over the webhook — and without it, an address that no longer exists is
+retried on every send, indefinitely, which is how a sending domain's reputation
+is lost.
+
+**One-time setup.** In the provider dashboard, add an endpoint at
+`$HERALD/v1/webhooks/resend` subscribed to `email.delivered`, `email.bounced`,
+`email.complained`, `email.delivery_delayed` and `email.failed`. Copy the
+signing secret it shows (`whsec_…`), set `RESEND_WEBHOOK_SECRET` and restart.
+Other event types can be subscribed harmlessly — Herald acknowledges and
+ignores them.
+
+Leave the variable unset to keep the endpoint closed: it then answers `503` and
+records nothing, because an event that cannot be verified is not one to act on.
+That matters more than it looks — the endpoint is unauthenticated by design (the
+provider has no API key), so the signature is the only thing stopping anyone
+from posting a forged bounce to suppress an address.
+
+Once running, `GET /v1/emails/{id}` carries a second field:
+
+```jsonc
+{
+  "status": "SENT",            // how far Herald got: handed to the provider
+  "deliveryState": "BOUNCED",  // what happened next: it did not arrive
+  "deliveryDetail": "Permanent/General: The mailbox does not exist."
+}
+```
+
+A `SENT` message with a `BOUNCED` delivery state is the normal way a bad
+address looks, not a contradiction. `deliveryState` stays null until an event
+arrives for that message.
+
+**Suppressions.** A permanent bounce or a spam complaint adds the address to
+that tenant's suppression list; a *transient* bounce (full mailbox, greylisting)
+does not, since that is the case the outbox already retries. Submissions to a
+suppressed address are refused with `422` and type
+`/errors/recipient-suppressed` — before the quota gates, so they cost the tenant
+nothing.
+
+```bash
+curl -sS "$HERALD/v1/suppressions" -H "$TENANT"
+# → [{"recipient":"ghost@example.com","reason":"bounced","detail":"...","createdAt":"..."}]
+
+# Once the address is known good again (the recipient fixed their mail server,
+# or it was suppressed by a misconfiguration on their side):
+curl -sS -X DELETE "$HERALD/v1/suppressions/ghost@example.com" -H "$TENANT"
+```
+
+Suppressions are per tenant, not global: each tenant sends from its own domain
+with its own reputation, so a bounce for one is not evidence about another.
+They are keyed by the same canonical form the recipient cooldown uses, so any
+spelling of a Gmail address finds the entry — suppressing `a.b+tag@gmail.com`
+also covers `ab@gmail.com`, and either one removes it.
+
+Watch `herald.suppressions.added` (tagged by reason). A jump means a tenant is
+mailing a stale list, which is worth raising with them before the provider
+does. `herald.webhooks.rejected` tagged `bad_signature` should be flat — a
+sustained count there is either a stale secret after a rotation or someone
+probing the endpoint. The same counter tagged `too_large` means a body over
+256 KB was turned away unread (answered `413`); real events are a few KB, so
+anything there is someone else.
+
 ## Rotating a key
 
 Issue the new key, deploy it to the client app, then revoke the old one —
@@ -147,6 +212,10 @@ payload, an unverified sender domain) or when retryable failures exhausted
 A sudden run of rejections on one tenant usually means its sender identity
 stopped being valid at the provider — check `sender_identities`.
 
+FAILED is about sending. A message that left cleanly and was refused at the
+destination is `SENT` with a `deliveryState` of `BOUNCED` instead — see
+[Delivery events and suppressions](#delivery-events-and-suppressions).
+
 To retry a dead letter after fixing the cause, requeue it in SQL:
 
 ```sql
@@ -167,6 +236,10 @@ it should stay flat in normal operation. Its siblings are
   provider's daily quota when the backlog is large. Domain verification polls
   pause with it.
 - **No `ADMIN_API_KEY`**: the whole `/admin/v1/**` surface answers 401/403.
+- **No `RESEND_WEBHOOK_SECRET`**: `/v1/webhooks/resend` answers 503. Delivery
+  states stop updating and nothing new is suppressed; existing suppressions
+  still apply. The provider retries for its own retention window, so a short
+  gap backfills itself once the secret is restored.
 - **Suspend a tenant** (no API in v1 — SQL hatch):
   `UPDATE tenants SET status = 'SUSPENDED' WHERE slug = 'acme';`
   Its keys immediately answer 403. Set back to `ACTIVE` to lift.
@@ -184,6 +257,10 @@ it should stay flat in normal operation. Its siblings are
 - Migrations run automatically at boot (Flyway). Rolling back a deploy whose
   migration already ran requires a manual, compensating migration — prefer
   additive schema changes.
+- `webhook_events` only exists to make a redelivered event a no-op, so nothing
+  reads rows older than the provider's retry window. It has no purge yet —
+  until `messages` retention lands, trim it by hand if it ever gets large:
+  `DELETE FROM webhook_events WHERE received_at < now() - interval '30 days';`
 - Emergency SQL access is the Neon console's SQL editor; every quota decision
   is explainable from `messages` (`tenant_id`, `created_at`,
   `recipient_canonical`, `limit_keys`) — there is no separate bucket state to

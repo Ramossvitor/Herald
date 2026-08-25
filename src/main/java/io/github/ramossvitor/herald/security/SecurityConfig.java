@@ -23,6 +23,11 @@ public class SecurityConfig {
 						// keyed API, it doesn't grant access to it.
 						.requestMatchers("/actuator/health", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html")
 						.permitAll()
+						// The provider has no API key to present. Authentication
+						// here is the Svix signature over the request body, which
+						// the endpoint checks before touching anything — see
+						// ResendWebhookController.
+						.requestMatchers("/v1/webhooks/resend").permitAll()
 						.requestMatchers("/actuator/**").hasRole("ADMIN")
 						.requestMatchers("/admin/v1/**").hasRole("ADMIN")
 						.anyRequest().hasRole("TENANT"))

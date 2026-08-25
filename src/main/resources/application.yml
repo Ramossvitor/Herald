@@ -45,6 +45,10 @@ herald:
     base-url: https://api.resend.com
     # Empty key pauses dispatch: messages queue as PENDING until it is set.
     api-key: ${RESEND_API_KEY:}
+    # Svix signing secret for the delivery webhook, from the provider dashboard.
+    # Empty closes /v1/webhooks/resend: without it an event cannot be verified,
+    # and acting on unverified events would let anyone suppress an address.
+    webhook-secret: ${RESEND_WEBHOOK_SECRET:}
     connect-timeout: 5s
     read-timeout: 10s
   outbox:

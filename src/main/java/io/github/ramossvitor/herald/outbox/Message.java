@@ -83,6 +83,21 @@ public class Message {
 	@Column(name = "sent_at")
 	private Instant sentAt;
 
+	/**
+	 * What the provider reported after accepting the message. Written only by
+	 * the webhook path and never read by the dispatch loop — see
+	 * {@link DeliveryState}.
+	 */
+	@Enumerated(EnumType.STRING)
+	@Column(name = "delivery_state")
+	private DeliveryState deliveryState;
+
+	@Column(name = "delivery_detail")
+	private String deliveryDetail;
+
+	@Column(name = "delivery_updated_at")
+	private Instant deliveryUpdatedAt;
+
 	protected Message() {
 		// JPA
 	}
@@ -143,6 +158,25 @@ public class Message {
 		this.lastError = error;
 		this.nextAttemptAt = nextAttemptAt;
 		this.updatedAt = now;
+	}
+
+	/**
+	 * Records what the provider said about delivery. Deliberately leaves
+	 * {@code status}, {@code attemptCount} and {@code nextAttemptAt} alone: the
+	 * outbox is done with this message, and touching them would hand it back to
+	 * the dispatch loop.
+	 *
+	 * @return whether the event was applied — false when an earlier, terminal
+	 *         state already stands
+	 */
+	public boolean recordDeliveryEvent(DeliveryState state, String detail, Instant now) {
+		if (!DeliveryState.supersedes(this.deliveryState, state)) {
+			return false;
+		}
+		this.deliveryState = state;
+		this.deliveryDetail = detail;
+		this.deliveryUpdatedAt = now;
+		return true;
 	}
 
 	public UUID getId() {
@@ -215,5 +249,17 @@ public class Message {
 
 	public Instant getSentAt() {
 		return sentAt;
+	}
+
+	public DeliveryState getDeliveryState() {
+		return deliveryState;
+	}
+
+	public String getDeliveryDetail() {
+		return deliveryDetail;
+	}
+
+	public Instant getDeliveryUpdatedAt() {
+		return deliveryUpdatedAt;
 	}
 }

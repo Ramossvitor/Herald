@@ -8,15 +8,24 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 
 /**
- * Every read is scoped to one tenant: quota budgets, idempotency keys and
- * status lookups all belong to exactly one, and nothing here may answer across
- * that boundary.
+ * Every read reachable from the API is scoped to one tenant: quota budgets,
+ * idempotency keys and status lookups all belong to exactly one, and nothing
+ * serving a request may answer across that boundary.
+ *
+ * {@link #findByProviderMessageId} is the single exception, and only because it
+ * cannot be scoped: it serves the provider's webhook, which knows a provider id
+ * and nothing else. It is how the tenant gets established, so it cannot presume
+ * one — which is exactly why callers must take the tenant from the row it
+ * returns and never from the payload that led them here.
  */
 public interface MessageRepository extends JpaRepository<Message, UUID> {
 
 	Optional<Message> findByTenantIdAndIdempotencyKey(UUID tenantId, String idempotencyKey);
 
 	Optional<Message> findByIdAndTenantId(UUID id, UUID tenantId);
+
+	/** Webhook lookup — see the note above about tenant scoping. */
+	Optional<Message> findByProviderMessageId(String providerMessageId);
 
 	/** Daily-window counter. Counts accepted rows regardless of status: a
 	 * message that later failed still consumed provider attempts. */
