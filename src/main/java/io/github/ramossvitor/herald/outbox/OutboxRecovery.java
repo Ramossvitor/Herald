@@ -10,12 +10,11 @@ import org.springframework.stereotype.Component;
 
 /**
  * Returns SENDING rows abandoned by a crashed worker to the queue. Ten minutes
- * is far beyond any legitimate pass.
+ * is far beyond any legitimate pass, which the worker's own batch ceiling
+ * bounds at about thirty seconds.
  *
- * The re-send is free on email, where the message id is the provider's
- * idempotency key, and can duplicate on WhatsApp, where Meta offers no
- * equivalent — see {@link OutboxStore#releaseStuckSending} for why that is
- * still the right trade.
+ * The re-send is free: the message id is the provider's idempotency key, so it
+ * collapses into the original — see {@link OutboxStore#releaseStuckSending}.
  */
 @Component
 @Lazy(false) // see OutboxWorker

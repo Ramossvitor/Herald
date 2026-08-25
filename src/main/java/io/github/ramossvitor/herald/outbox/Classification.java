@@ -1,9 +1,9 @@
 package io.github.ramossvitor.herald.outbox;
 
 /**
- * What a provider's answer means to the retry policy. Every channel maps its
- * own status vocabulary onto this one, so {@link RetryPolicy} never learns a
- * second set of error codes.
+ * What a provider's answer means to the retry policy. The provider maps its own
+ * status vocabulary onto this one, so {@link RetryPolicy} never learns a second
+ * set of error codes.
  */
 public enum Classification {
 	SUCCESS,

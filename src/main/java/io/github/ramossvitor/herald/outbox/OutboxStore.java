@@ -9,7 +9,6 @@ import java.util.UUID;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import io.github.ramossvitor.herald.sender.Channel;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 
@@ -33,23 +32,17 @@ public class OutboxStore {
 	 * {@code FOR UPDATE SKIP LOCKED}: concurrent claimers never block on each
 	 * other and never pick the same row. Claimed rows leave as SENDING, so a
 	 * crash before recording leaves evidence for {@link OutboxRecovery}.
-	 *
-	 * Claiming one channel at a time is half of what keeps a stalled provider
-	 * from starving the others: nobody else's batch is filled with rows only it
-	 * can send. The other half is the worker's per-channel batch ceiling, which
-	 * bounds how long one channel can hold the pass.
 	 */
 	@Transactional
-	public List<Message> claimDueBatch(Channel channel, int batchSize) {
+	public List<Message> claimDueBatch(int batchSize) {
 		@SuppressWarnings("unchecked")
 		List<UUID> ids = entityManager.createNativeQuery("""
 				select id from messages
-				where channel = :channel and status = 'PENDING' and next_attempt_at <= now()
+				where status = 'PENDING' and next_attempt_at <= now()
 				order by next_attempt_at
 				limit :batchSize
 				for update skip locked
 				""", UUID.class)
-				.setParameter("channel", channel.name())
 				.setParameter("batchSize", batchSize)
 				.getResultList();
 		if (ids.isEmpty()) {
@@ -83,15 +76,12 @@ public class OutboxStore {
 
 	/**
 	 * A row stuck in SENDING means a worker died between claim and record.
-	 * Channel-agnostic on purpose: a crash abandons rows on whatever channel was
-	 * in flight, and re-sending is the lesser risk on all of them.
+	 * Re-sending is the lesser risk: the alternative is failing a message that
+	 * may never have been sent at all, and a notification nobody receives is
+	 * worse than one received twice.
 	 *
-	 * What re-sending costs differs by channel. On email the message id is the
-	 * provider's idempotency key, so the second send collapses into the first.
-	 * Meta's Cloud API takes no such key, so a recovered WhatsApp row can arrive
-	 * twice and be billed twice. That is deliberate: the alternative is failing a
-	 * message that may never have been sent at all, and a notification nobody
-	 * receives is worse than one received twice.
+	 * Here it costs nothing either way — the message id is the provider's
+	 * idempotency key, so a second send collapses into the first.
 	 */
 	@Transactional
 	public int releaseStuckSending(Duration olderThan) {

@@ -42,7 +42,6 @@ import io.github.ramossvitor.herald.outbox.MessageRepository;
 import io.github.ramossvitor.herald.outbox.MessageStatus;
 import io.github.ramossvitor.herald.outbox.OutboxStore;
 import io.github.ramossvitor.herald.outbox.OutboxWorker;
-import io.github.ramossvitor.herald.sender.Channel;
 import io.github.ramossvitor.herald.tenant.Tenant;
 import io.github.ramossvitor.herald.tenant.admin.TenantAdminService;
 
@@ -231,8 +230,8 @@ class OutboxIntegrationTest {
 
 		ExecutorService executor = Executors.newFixedThreadPool(2);
 		try {
-			Future<List<Message>> left = executor.submit(() -> store.claimDueBatch(Channel.EMAIL, 10));
-			Future<List<Message>> right = executor.submit(() -> store.claimDueBatch(Channel.EMAIL, 10));
+			Future<List<Message>> left = executor.submit(() -> store.claimDueBatch(10));
+			Future<List<Message>> right = executor.submit(() -> store.claimDueBatch(10));
 
 			Set<UUID> ids = new HashSet<>();
 			left.get().forEach(message -> ids.add(message.getId()));

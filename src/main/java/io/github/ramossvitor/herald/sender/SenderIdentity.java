@@ -26,10 +26,6 @@ public class SenderIdentity {
 
 	@Enumerated(EnumType.STRING)
 	@Column(nullable = false)
-	private Channel channel;
-
-	@Enumerated(EnumType.STRING)
-	@Column(nullable = false)
 	private SenderIdentityKind kind;
 
 	@Column(nullable = false)
@@ -67,11 +63,9 @@ public class SenderIdentity {
 		// JPA
 	}
 
-	public SenderIdentity(UUID tenantId, Channel channel, SenderIdentityKind kind, String identifier,
-			Instant createdAt) {
+	public SenderIdentity(UUID tenantId, SenderIdentityKind kind, String identifier, Instant createdAt) {
 		this.id = UUID.randomUUID();
 		this.tenantId = tenantId;
-		this.channel = channel;
 		this.kind = kind;
 		this.identifier = identifier;
 		this.status = SenderIdentityStatus.PENDING;
@@ -81,9 +75,8 @@ public class SenderIdentity {
 	}
 
 	/** Operator-trusted identities skip provider verification entirely. */
-	public static SenderIdentity trusted(UUID tenantId, Channel channel, SenderIdentityKind kind, String identifier,
-			Instant now) {
-		SenderIdentity identity = new SenderIdentity(tenantId, channel, kind, identifier, now);
+	public static SenderIdentity trusted(UUID tenantId, SenderIdentityKind kind, String identifier, Instant now) {
+		SenderIdentity identity = new SenderIdentity(tenantId, kind, identifier, now);
 		identity.status = SenderIdentityStatus.VERIFIED;
 		identity.verifiedAt = now;
 		return identity;
@@ -141,10 +134,6 @@ public class SenderIdentity {
 
 	public UUID getTenantId() {
 		return tenantId;
-	}
-
-	public Channel getChannel() {
-		return channel;
 	}
 
 	public SenderIdentityKind getKind() {

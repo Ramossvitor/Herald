@@ -1,8 +1,6 @@
 package io.github.ramossvitor.herald.email;
 
 import java.time.Clock;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.stereotype.Service;
@@ -10,9 +8,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import io.github.ramossvitor.herald.outbox.Message;
 import io.github.ramossvitor.herald.outbox.MessageRepository;
-import io.github.ramossvitor.herald.quota.ChannelLimits;
 import io.github.ramossvitor.herald.quota.QuotaService;
-import io.github.ramossvitor.herald.sender.Channel;
+import io.github.ramossvitor.herald.quota.TenantLimits;
 import io.github.ramossvitor.herald.sender.SenderIdentityService;
 import io.github.ramossvitor.herald.tenant.TenantEmailSettings;
 import io.github.ramossvitor.herald.tenant.TenantEmailSettingsRepository;
@@ -61,7 +58,7 @@ public class EmailSubmissionService {
 
 		if (request.idempotencyKey() != null) {
 			Message existing = messages
-					.findByTenantIdAndChannelAndIdempotencyKey(tenantId, Channel.EMAIL, request.idempotencyKey())
+					.findByTenantIdAndIdempotencyKey(tenantId, request.idempotencyKey())
 					.orElse(null);
 			if (existing != null) {
 				return new Submission(existing, true);
@@ -84,34 +81,24 @@ public class EmailSubmissionService {
 
 		Message message = messages.save(new Message(
 				tenantId,
-				Channel.EMAIL,
 				request.idempotencyKey(),
 				request.to(),
 				canonicalRecipient,
 				from,
-				payloadOf(request),
+				contentOf(request),
 				request.limitKeysOrEmpty(),
 				clock.instant()));
-		metrics.counter("herald.messages.accepted", "channel", "email").increment();
+		metrics.counter("herald.messages.accepted").increment();
 		return new Submission(message, false);
 	}
 
-	private static ChannelLimits limitsFor(TenantEmailSettings settings) {
-		return new ChannelLimits(settings.getTenantId(), Channel.EMAIL, settings.getDailyLimit(),
+	private static TenantLimits limitsFor(TenantEmailSettings settings) {
+		return new TenantLimits(settings.getTenantId(), settings.getDailyLimit(),
 				settings.getRecipientCooldownSeconds());
 	}
 
-	/** Null entries are omitted, not stored: the column is JSON, and an absent
-	 * key reads the same as a null one without carrying it around. */
-	private static Map<String, Object> payloadOf(SendEmailRequest request) {
-		Map<String, Object> payload = new LinkedHashMap<>();
-		payload.put("subject", request.subject());
-		payload.put("html", request.html());
-		payload.put("text", request.text());
-		if (request.replyTo() != null) {
-			payload.put("replyTo", request.replyTo());
-		}
-		return payload;
+	private static Message.Content contentOf(SendEmailRequest request) {
+		return new Message.Content(request.subject(), request.html(), request.text(), request.replyTo());
 	}
 
 	private void lockTenant(UUID tenantId) {

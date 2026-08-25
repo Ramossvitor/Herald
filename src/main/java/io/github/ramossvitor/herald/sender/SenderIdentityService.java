@@ -75,8 +75,8 @@ public class SenderIdentityService {
 	public void provisionFor(UUID tenantId, String slug, String explicitFromAddress) {
 		String root = sharedRootDomain();
 		if (!root.isBlank()) {
-			identities.save(SenderIdentity.trusted(tenantId, Channel.EMAIL,
-					SenderIdentityKind.EMAIL_SHARED_ADDRESS, slug + "@" + root, clock.instant()));
+			identities.save(SenderIdentity.trusted(tenantId, SenderIdentityKind.EMAIL_SHARED_ADDRESS,
+					slug + "@" + root, clock.instant()));
 		}
 		if (explicitFromAddress != null) {
 			trustCustomDomain(tenantId, explicitFromAddress);
@@ -96,10 +96,10 @@ public class SenderIdentityService {
 			throw new SenderNotVerifiedException(from);
 		}
 		String addrSpec = EmailAddresses.addrSpec(normalized);
-		boolean sharedAddress = identities.existsByTenantIdAndChannelAndKindAndIdentifierAndStatus(tenantId,
-				Channel.EMAIL, SenderIdentityKind.EMAIL_SHARED_ADDRESS, addrSpec, SenderIdentityStatus.VERIFIED);
-		boolean customDomain = identities.existsByTenantIdAndChannelAndKindAndIdentifierAndStatus(tenantId,
-				Channel.EMAIL, SenderIdentityKind.EMAIL_CUSTOM_DOMAIN, EmailAddresses.domainOf(addrSpec),
+		boolean sharedAddress = identities.existsByTenantIdAndKindAndIdentifierAndStatus(tenantId,
+				SenderIdentityKind.EMAIL_SHARED_ADDRESS, addrSpec, SenderIdentityStatus.VERIFIED);
+		boolean customDomain = identities.existsByTenantIdAndKindAndIdentifierAndStatus(tenantId,
+				SenderIdentityKind.EMAIL_CUSTOM_DOMAIN, EmailAddresses.domainOf(addrSpec),
 				SenderIdentityStatus.VERIFIED);
 		if (!sharedAddress && !customDomain) {
 			throw new SenderNotVerifiedException(from);
@@ -137,10 +137,10 @@ public class SenderIdentityService {
 			return;
 		}
 		SenderIdentity existing = identities
-				.findByTenantIdAndChannelAndIdentifier(tenantId, Channel.EMAIL, domain).orElse(null);
+				.findByTenantIdAndIdentifier(tenantId, domain).orElse(null);
 		if (existing == null) {
-			identities.save(SenderIdentity.trusted(tenantId, Channel.EMAIL, SenderIdentityKind.EMAIL_CUSTOM_DOMAIN,
-					domain, clock.instant()));
+			identities.save(SenderIdentity.trusted(tenantId, SenderIdentityKind.EMAIL_CUSTOM_DOMAIN, domain,
+					clock.instant()));
 			return;
 		}
 		// A row that is not VERIFIED yet — a self-service registration still
@@ -169,12 +169,12 @@ public class SenderIdentityService {
 		if (!allowSharedRoot && !root.isBlank() && domain.endsWith("." + root)) {
 			throw new ConflictException("domain is reserved: " + domain);
 		}
-		if (identities.existsByChannelAndKindAndIdentifierAndProviderRefIsNotNull(Channel.EMAIL,
+		if (identities.existsByKindAndIdentifierAndProviderRefIsNotNull(
 				SenderIdentityKind.EMAIL_CUSTOM_DOMAIN, domain)) {
 			throw new ConflictException("domain already registered: " + domain);
 		}
 		SenderIdentity previous = identities
-				.findByTenantIdAndChannelAndIdentifier(tenantId, Channel.EMAIL, domain).orElse(null);
+				.findByTenantIdAndIdentifier(tenantId, domain).orElse(null);
 		if (previous != null) {
 			// A failed attempt is not a life sentence: DNS gets fixed. Anything
 			// else is a domain this tenant already holds.
@@ -183,7 +183,7 @@ public class SenderIdentityService {
 			}
 			delete(previous, true);
 		}
-		if (identities.countByTenantIdAndChannelAndKindAndStatusNot(tenantId, Channel.EMAIL,
+		if (identities.countByTenantIdAndKindAndStatusNot(tenantId,
 				SenderIdentityKind.EMAIL_CUSTOM_DOMAIN, SenderIdentityStatus.VERIFIED) >= MAX_UNVERIFIED_DOMAINS) {
 			throw new ConflictException(
 					"too many unverified domains: verify or delete one before registering another");
@@ -193,8 +193,8 @@ public class SenderIdentityService {
 		// Nothing is persisted until the provider has answered: a row saved
 		// first and abandoned mid-call would claim the domain system-wide with
 		// no provider_ref to delete it by.
-		SenderIdentity identity = new SenderIdentity(tenantId, Channel.EMAIL,
-				SenderIdentityKind.EMAIL_CUSTOM_DOMAIN, domain, clock.instant());
+		SenderIdentity identity = new SenderIdentity(tenantId, SenderIdentityKind.EMAIL_CUSTOM_DOMAIN, domain,
+				clock.instant());
 		ResendClient.Outcome outcome = resend.createDomain(domain);
 		if (outcome.transportFailed() || outcome.httpStatus() >= 400) {
 			throw new ProviderUnavailableException(describe("domain registration failed", outcome));

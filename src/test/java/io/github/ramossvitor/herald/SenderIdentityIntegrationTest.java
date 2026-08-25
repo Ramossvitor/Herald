@@ -85,7 +85,7 @@ class SenderIdentityIntegrationTest {
 	@BeforeEach
 	void resetProvider() {
 		RESEND.resetAll();
-		// Self-service identities are globally unique on (channel, identifier);
+		// Self-service identities are globally unique on (identifier);
 		// wipe them so each test can reuse simple domain names.
 		jdbc.update("delete from sender_identities where provider_ref is not null");
 	}
