@@ -51,7 +51,7 @@ public class AdminSenderIdentityController {
 
 	@GetMapping
 	public List<SenderIdentityResponse> list(@PathVariable UUID tenantId) {
-		return identities.findByTenantIdAndChannelOrderByCreatedAt(tenantId, Channel.EMAIL)
+		return identities.findByTenantIdOrderByCreatedAt(tenantId)
 				.stream().map(SenderIdentityResponse::from).toList();
 	}
 

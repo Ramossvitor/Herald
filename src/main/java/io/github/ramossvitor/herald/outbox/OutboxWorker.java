@@ -1,11 +1,6 @@
 package io.github.ramossvitor.herald.outbox;
 
-import java.time.Duration;
-import java.util.EnumMap;
-import java.util.EnumSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.slf4j.Logger;
@@ -16,12 +11,11 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import io.github.ramossvitor.herald.common.HeraldProperties;
-import io.github.ramossvitor.herald.sender.Channel;
 import io.micrometer.core.instrument.MeterRegistry;
 
 /**
- * Polls the outbox and pushes due messages through their channel's provider,
- * one at a time, paced under the provider's requests-per-second limit.
+ * Polls the outbox and pushes due messages through the provider, one at a time,
+ * paced under the provider's requests-per-second limit.
  *
  * Delivery is at-least-once from the outbox's point of view; the provider
  * idempotency key collapses that to effectively-once at the destination.
@@ -37,32 +31,32 @@ public class OutboxWorker {
 	/** While idle, only every Nth tick touches the database (serverless
 	 * Postgres bills compute time; a hot poll would keep it awake for nothing). */
 	private static final int IDLE_POLL_EVERY_TICKS = 10;
-	/** Batches one channel may take before the pass moves on. Without a ceiling
-	 * a deep backlog would hold the thread for backlog × send-interval, and
-	 * every other channel's due messages would wait out the whole of it. The
-	 * remainder stays due and the next tick continues it. */
-	private static final int MAX_BATCHES_PER_CHANNEL = 5;
+	/**
+	 * Batches one pass may take before it yields. Every @Scheduled job in this
+	 * application shares Spring's default single-threaded scheduler, and this
+	 * loop sleeps in-thread to pace sends — so an unbounded pass over a deep
+	 * backlog would hold that one thread for backlog × send-interval. During it
+	 * {@link OutboxRecovery} would never run, and the rows a crashed worker
+	 * abandoned would never be released: the worker would starve its own safety
+	 * net. Five batches bounds a pass at roughly thirty seconds; the remainder
+	 * stays due and the next tick continues it.
+	 */
+	private static final int MAX_BATCHES_PER_TICK = 5;
 
 	private final OutboxStore store;
-	private final Map<Channel, ChannelProvider> providers = new EnumMap<>(Channel.class);
+	private final MessageSender sender;
 	private final HeraldProperties.Outbox properties;
 	private final RetryPolicy retryPolicy;
 	private final MeterRegistry metrics;
 
 	private final AtomicBoolean nudged = new AtomicBoolean(false);
-	private final Set<Channel> warnedNotConfigured = EnumSet.noneOf(Channel.class);
+	private boolean warnedNotConfigured;
 	private int idleTicks = 0;
 	private int ticksSinceLastPoll = 0;
 
-	public OutboxWorker(OutboxStore store, List<ChannelProvider> providers, HeraldProperties properties,
-			MeterRegistry metrics) {
+	public OutboxWorker(OutboxStore store, MessageSender sender, HeraldProperties properties, MeterRegistry metrics) {
 		this.store = store;
-		for (ChannelProvider provider : providers) {
-			ChannelProvider clash = this.providers.put(provider.channel(), provider);
-			if (clash != null) {
-				throw new IllegalStateException("two providers claim channel " + provider.channel());
-			}
-		}
+		this.sender = sender;
 		this.properties = properties.outbox();
 		this.retryPolicy = new RetryPolicy(this.properties.maxAttempts());
 		this.metrics = metrics;
@@ -82,84 +76,65 @@ public class OutboxWorker {
 		}
 		nudged.set(false);
 		ticksSinceLastPoll = 0;
-		int processed = runOnce();
+		int processed;
+		try {
+			processed = runOnce();
+		}
+		catch (RuntimeException ex) {
+			// Rows already claimed stay SENDING; OutboxRecovery releases them.
+			// Swallowed here rather than in runOnce so the scheduled path
+			// survives while the test entry point still fails loudly.
+			log.error("outbox pass aborted", ex);
+			processed = 0;
+		}
 		idleTicks = processed > 0 ? 0 : idleTicks + 1;
 	}
 
-	/**
-	 * One pass over what is currently due, on every channel. A channel that
-	 * throws costs its own pass and nothing else — the point of the whole
-	 * arrangement is that no channel can take another down.
-	 *
-	 * Public for tests.
-	 */
+	/** Everything currently due. Public for tests. */
 	public int runOnce() {
-		int processed = 0;
-		for (ChannelProvider provider : providers.values()) {
-			try {
-				processed += drain(provider);
-			}
-			catch (RuntimeException ex) {
-				// Rows already claimed stay SENDING; OutboxRecovery releases them.
-				log.error("{} pass aborted", provider.channel(), ex);
-			}
-		}
-		return processed;
-	}
-
-	/** Everything currently due on one channel. Public for tests. */
-	public int runOnce(Channel channel) {
-		ChannelProvider provider = providers.get(channel);
-		return provider == null ? 0 : drain(provider);
-	}
-
-	private int drain(ChannelProvider provider) {
-		if (!provider.configured()) {
-			if (warnedNotConfigured.add(provider.channel())) {
-				log.warn("{} has no provider credentials — dispatch is paused, messages will queue as PENDING",
-						provider.channel());
+		if (!sender.configured()) {
+			if (!warnedNotConfigured) {
+				warnedNotConfigured = true;
+				log.warn("no provider credentials — dispatch is paused, messages will queue as PENDING");
 			}
 			return 0;
 		}
 		int processed = 0;
-		for (int batches = 0; batches < MAX_BATCHES_PER_CHANNEL; batches++) {
-			List<Message> batch = store.claimDueBatch(provider.channel(), properties.batchSize());
+		for (int batches = 0; batches < MAX_BATCHES_PER_TICK; batches++) {
+			List<Message> batch = store.claimDueBatch(properties.batchSize());
 			if (batch.isEmpty()) {
 				return processed;
 			}
 			for (int i = 0; i < batch.size(); i++) {
 				if (i > 0) {
-					pace(provider);
+					pace();
 				}
-				processOne(provider, batch.get(i));
+				processOne(batch.get(i));
 				processed++;
 			}
 			if (batch.size() < properties.batchSize()) {
 				return processed;
 			}
-			pace(provider);
+			pace();
 		}
-		log.info("{} still has messages due after {} batches — resuming next tick", provider.channel(),
-				MAX_BATCHES_PER_CHANNEL);
+		log.info("messages still due after {} batches — resuming next tick", MAX_BATCHES_PER_TICK);
 		return processed;
 	}
 
-	private void processOne(ChannelProvider provider, Message message) {
+	private void processOne(Message message) {
 		MDC.put("messageId", message.getId().toString());
-		MDC.put("channel", message.getChannel().name());
 		try {
-			ChannelProvider.Attempt attempt = provider.send(message);
+			Attempt attempt = sender.send(message);
 
 			int attemptNumber = message.getAttemptCount() + 1;
 			RetryPolicy.Decision decision = retryPolicy.decide(attempt.classification(), attemptNumber,
 					attempt.retryAfterSeconds());
 			store.recordOutcome(message.getId(), decision, attempt.providerMessageId(), attempt.error());
 
-			String channel = message.getChannel().name().toLowerCase();
 			switch (decision.status()) {
-				case SENT -> metrics.counter("herald.messages.sent", "channel", channel).increment();
+				case SENT -> metrics.counter("herald.messages.sent").increment();
 				case FAILED -> {
-					metrics.counter("herald.messages.failed", "channel", channel).increment();
+					metrics.counter("herald.messages.failed").increment();
 					log.error("message failed after attempt {}: {}", attemptNumber, attempt.classification());
 				}
 				case PENDING -> log.warn("attempt {} got {}, retrying in {}", attemptNumber, attempt.classification(),
@@ -169,14 +144,12 @@ public class OutboxWorker {
 		}
 		finally {
 			MDC.remove("messageId");
-			MDC.remove("channel");
 		}
 	}
 
-	private void pace(ChannelProvider provider) {
-		Duration interval = provider.sendInterval();
+	private void pace() {
 		try {
-			Thread.sleep((interval != null ? interval : properties.sendInterval()).toMillis());
+			Thread.sleep(properties.sendInterval().toMillis());
 		}
 		catch (InterruptedException ex) {
 			Thread.currentThread().interrupt();

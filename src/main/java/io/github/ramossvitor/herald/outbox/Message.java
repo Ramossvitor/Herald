@@ -2,13 +2,11 @@ package io.github.ramossvitor.herald.outbox;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
-import io.github.ramossvitor.herald.sender.Channel;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -17,8 +15,8 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 /**
- * One queued delivery, on any channel. The columns are the dispatch loop's
- * vocabulary; whatever only one channel understands rides in {@link #payload}.
+ * One queued email. Delivery state lives in the columns the dispatch loop
+ * reads; content in the columns the provider reads.
  */
 @Entity
 @Table(name = "messages")
@@ -29,10 +27,6 @@ public class Message {
 
 	@Column(name = "tenant_id", nullable = false)
 	private UUID tenantId;
-
-	@Enumerated(EnumType.STRING)
-	@Column(nullable = false)
-	private Channel channel;
 
 	@Column(name = "idempotency_key")
 	private String idempotencyKey;
@@ -45,12 +39,20 @@ public class Message {
 	private String recipientCanonical;
 
 	/** Snapshot: editing tenant settings must not change queued messages. */
-	@Column(nullable = false)
-	private String sender;
+	@Column(name = "from_address", nullable = false)
+	private String fromAddress;
 
-	@JdbcTypeCode(SqlTypes.JSON)
-	@Column(nullable = false, columnDefinition = "jsonb")
-	private Map<String, Object> payload;
+	@Column(nullable = false)
+	private String subject;
+
+	@Column(name = "html_body", nullable = false)
+	private String htmlBody;
+
+	@Column(name = "text_body", nullable = false)
+	private String textBody;
+
+	@Column(name = "reply_to")
+	private String replyTo;
 
 	@JdbcTypeCode(SqlTypes.ARRAY)
 	@Column(name = "limit_keys", columnDefinition = "text[]", nullable = false)
@@ -85,16 +87,26 @@ public class Message {
 		// JPA
 	}
 
-	public Message(UUID tenantId, Channel channel, String idempotencyKey, String recipient, String recipientCanonical,
-			String sender, Map<String, Object> payload, List<String> limitKeys, Instant createdAt) {
+	/**
+	 * What the provider sends. A record rather than four loose parameters: they
+	 * are all strings and all adjacent, so positional arguments could be
+	 * transposed without the compiler noticing.
+	 */
+	public record Content(String subject, String htmlBody, String textBody, String replyTo) {
+	}
+
+	public Message(UUID tenantId, String idempotencyKey, String recipient, String recipientCanonical,
+			String fromAddress, Content content, List<String> limitKeys, Instant createdAt) {
 		this.id = UUID.randomUUID();
 		this.tenantId = tenantId;
-		this.channel = channel;
 		this.idempotencyKey = idempotencyKey;
 		this.recipient = recipient;
 		this.recipientCanonical = recipientCanonical;
-		this.sender = sender;
-		this.payload = Map.copyOf(payload);
+		this.fromAddress = fromAddress;
+		this.subject = content.subject();
+		this.htmlBody = content.htmlBody();
+		this.textBody = content.textBody();
+		this.replyTo = content.replyTo();
 		this.limitKeys = List.copyOf(limitKeys);
 		this.status = MessageStatus.PENDING;
 		this.attemptCount = 0;
@@ -133,34 +145,12 @@ public class Message {
 		this.updatedAt = now;
 	}
 
-	/** Null when the key is absent or holds something other than a string. */
-	public String payloadText(String key) {
-		Object value = payload.get(key);
-		return value instanceof String text ? text : null;
-	}
-
-	/**
-	 * Empty when the key is absent or is not a list; non-string entries are
-	 * rendered rather than dropped, so a payload written by an older version
-	 * cannot silently shorten an argument list and shift every value after it.
-	 */
-	public List<String> payloadTextList(String key) {
-		if (!(payload.get(key) instanceof List<?> values)) {
-			return List.of();
-		}
-		return values.stream().map(String::valueOf).toList();
-	}
-
 	public UUID getId() {
 		return id;
 	}
 
 	public UUID getTenantId() {
 		return tenantId;
-	}
-
-	public Channel getChannel() {
-		return channel;
 	}
 
 	public String getIdempotencyKey() {
@@ -175,8 +165,24 @@ public class Message {
 		return recipientCanonical;
 	}
 
-	public String getSender() {
-		return sender;
+	public String getFromAddress() {
+		return fromAddress;
+	}
+
+	public String getSubject() {
+		return subject;
+	}
+
+	public String getHtmlBody() {
+		return htmlBody;
+	}
+
+	public String getTextBody() {
+		return textBody;
+	}
+
+	public String getReplyTo() {
+		return replyTo;
 	}
 
 	public List<String> getLimitKeys() {

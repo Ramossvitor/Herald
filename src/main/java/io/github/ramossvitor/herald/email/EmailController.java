@@ -18,7 +18,6 @@ import io.github.ramossvitor.herald.outbox.MessageRepository;
 import io.github.ramossvitor.herald.outbox.MessageStatus;
 import io.github.ramossvitor.herald.outbox.OutboxWorker;
 import io.github.ramossvitor.herald.security.TenantPrincipal;
-import io.github.ramossvitor.herald.sender.Channel;
 import jakarta.validation.Valid;
 
 @RestController
@@ -55,7 +54,7 @@ public class EmailController {
 
 	@GetMapping("/{id}")
 	public EmailStatusResponse status(@PathVariable UUID id, @AuthenticationPrincipal TenantPrincipal principal) {
-		Message message = messages.findByIdAndTenantIdAndChannel(id, principal.tenantId(), Channel.EMAIL)
+		Message message = messages.findByIdAndTenantId(id, principal.tenantId())
 				.orElseThrow(() -> new NotFoundException("email not found: " + id));
 		return new EmailStatusResponse(message.getId(), message.getStatus(), message.getAttemptCount(),
 				message.getProviderMessageId(), message.getLastError(), message.getCreatedAt(), message.getSentAt());

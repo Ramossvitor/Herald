@@ -43,7 +43,7 @@ public class SenderIdentityController {
 
 	@GetMapping
 	public List<SenderIdentityResponse> list(@AuthenticationPrincipal TenantPrincipal principal) {
-		return identities.findByTenantIdAndChannelOrderByCreatedAt(principal.tenantId(), Channel.EMAIL)
+		return identities.findByTenantIdOrderByCreatedAt(principal.tenantId())
 				.stream().map(SenderIdentityResponse::from).toList();
 	}
 

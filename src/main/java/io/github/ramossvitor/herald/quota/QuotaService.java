@@ -14,8 +14,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 
 /**
  * All counters derive from the outbox itself — no separate bucket state, and a
- * plain SELECT explains any rejection. Every count is scoped to one channel, so
- * a tenant's budgets never bleed into each other.
+ * plain SELECT explains any rejection.
  */
 @Service
 public class QuotaService {
@@ -39,18 +38,18 @@ public class QuotaService {
 	 * Checks run in the contract order of {@link QuotaReason}; the caller holds
 	 * a per-tenant advisory lock, so check-then-insert cannot race itself.
 	 */
-	public void check(ChannelLimits limits, String canonicalRecipient, List<String> limitKeys) {
+	public void check(TenantLimits limits, String canonicalRecipient, List<String> limitKeys) {
 		checkRecipientCooldown(limits, canonicalRecipient);
 		checkLimitKeys(limits, limitKeys);
 		checkDailyLimit(limits);
 	}
 
-	private void checkRecipientCooldown(ChannelLimits limits, String canonicalRecipient) {
+	private void checkRecipientCooldown(TenantLimits limits, String canonicalRecipient) {
 		if (limits.recipientCooldownSeconds() <= 0) {
 			return;
 		}
 		Instant lastAccepted = messages
-				.lastAcceptedForRecipient(limits.tenantId(), limits.channel(), canonicalRecipient)
+				.lastAcceptedForRecipient(limits.tenantId(), canonicalRecipient)
 				.orElse(null);
 		if (lastAccepted == null) {
 			return;
@@ -58,13 +57,13 @@ public class QuotaService {
 		Instant cooldownEnds = lastAccepted.plusSeconds(limits.recipientCooldownSeconds());
 		Instant now = clock.instant();
 		if (cooldownEnds.isAfter(now)) {
-			reject(limits, QuotaReason.RECIPIENT_COOLDOWN);
+			reject(QuotaReason.RECIPIENT_COOLDOWN);
 			throw QuotaExceededException
 					.recipientCooldown(Math.max(1, Duration.between(now, cooldownEnds).toSeconds()));
 		}
 	}
 
-	private void checkLimitKeys(ChannelLimits limits, List<String> limitKeys) {
+	private void checkLimitKeys(TenantLimits limits, List<String> limitKeys) {
 		Instant cutoff = clock.instant().minus(DAILY_WINDOW);
 		for (String limitKey : limitKeys) {
 			TenantLimitPolicy policy = limitPolicies
@@ -75,18 +74,18 @@ public class QuotaService {
 				// day a policy is created, invisible until then.
 				continue;
 			}
-			long used = messages.countWithLimitKeySince(limits.tenantId(), limits.channel().name(), limitKey, cutoff);
+			long used = messages.countWithLimitKeySince(limits.tenantId(), limitKey, cutoff);
 			if (used >= policy.getDailyCap()) {
-				reject(limits, QuotaReason.LIMIT_KEY_EXCEEDED);
+				reject(QuotaReason.LIMIT_KEY_EXCEEDED);
 				throw QuotaExceededException.limitKeyExceeded(limitKey);
 			}
 		}
 	}
 
-	private void checkDailyLimit(ChannelLimits limits) {
+	private void checkDailyLimit(TenantLimits limits) {
 		Instant cutoff = clock.instant().minus(DAILY_WINDOW);
-		if (messages.countAcceptedSince(limits.tenantId(), limits.channel(), cutoff) >= limits.dailyLimit()) {
-			reject(limits, QuotaReason.TENANT_DAILY_LIMIT);
+		if (messages.countAcceptedSince(limits.tenantId(), cutoff) >= limits.dailyLimit()) {
+			reject(QuotaReason.TENANT_DAILY_LIMIT);
 			throw QuotaExceededException.tenantDailyLimit();
 		}
 	}
@@ -96,9 +95,7 @@ public class QuotaService {
 		return colon < 0 ? limitKey : limitKey.substring(0, colon);
 	}
 
-	private void reject(ChannelLimits limits, QuotaReason reason) {
-		metrics.counter("herald.messages.rejected",
-				"channel", limits.channel().name().toLowerCase(),
-				"reason", reason.wireName()).increment();
+	private void reject(QuotaReason reason) {
+		metrics.counter("herald.messages.rejected", "reason", reason.wireName()).increment();
 	}
 }

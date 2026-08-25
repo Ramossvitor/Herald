@@ -1,6 +1,6 @@
 package io.github.ramossvitor.herald.outbox;
 
-/** Lifecycle of an outbox row, identical on every channel. */
+/** Lifecycle of an outbox row. */
 public enum MessageStatus {
 	PENDING,
 	SENDING,

@@ -9,20 +9,18 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface SenderIdentityRepository extends JpaRepository<SenderIdentity, UUID> {
 
-	List<SenderIdentity> findByTenantIdAndChannelOrderByCreatedAt(UUID tenantId, Channel channel);
+	List<SenderIdentity> findByTenantIdOrderByCreatedAt(UUID tenantId);
 
 	Optional<SenderIdentity> findByIdAndTenantId(UUID id, UUID tenantId);
 
-	Optional<SenderIdentity> findByTenantIdAndChannelAndIdentifier(UUID tenantId, Channel channel, String identifier);
+	Optional<SenderIdentity> findByTenantIdAndIdentifier(UUID tenantId, String identifier);
 
-	boolean existsByTenantIdAndChannelAndKindAndIdentifierAndStatus(UUID tenantId, Channel channel,
-			SenderIdentityKind kind, String identifier, SenderIdentityStatus status);
-
-	boolean existsByChannelAndKindAndIdentifierAndProviderRefIsNotNull(Channel channel, SenderIdentityKind kind,
-			String identifier);
-
-	long countByTenantIdAndChannelAndKindAndStatusNot(UUID tenantId, Channel channel, SenderIdentityKind kind,
+	boolean existsByTenantIdAndKindAndIdentifierAndStatus(UUID tenantId, SenderIdentityKind kind, String identifier,
 			SenderIdentityStatus status);
+
+	boolean existsByKindAndIdentifierAndProviderRefIsNotNull(SenderIdentityKind kind, String identifier);
+
+	long countByTenantIdAndKindAndStatusNot(UUID tenantId, SenderIdentityKind kind, SenderIdentityStatus status);
 
 	List<SenderIdentity> findTop50ByStatusAndNextCheckAtBeforeOrderByNextCheckAt(SenderIdentityStatus status,
 			Instant cutoff);

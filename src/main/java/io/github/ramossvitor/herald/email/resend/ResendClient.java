@@ -16,13 +16,13 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClient.RequestHeadersSpec.ConvertibleClientHttpResponse;
 
 import io.github.ramossvitor.herald.common.HeraldProperties;
-import io.github.ramossvitor.herald.outbox.ChannelProvider;
+import io.github.ramossvitor.herald.outbox.Attempt;
 import io.github.ramossvitor.herald.outbox.Classification;
 import io.github.ramossvitor.herald.outbox.Message;
-import io.github.ramossvitor.herald.sender.Channel;
+import io.github.ramossvitor.herald.outbox.MessageSender;
 
 @Component
-public class ResendClient implements ChannelProvider {
+public class ResendClient implements MessageSender {
 
 	/** Long enough to explain a rejection, short enough not to fill the row. */
 	private static final int MAX_ERROR_LENGTH = 500;
@@ -47,11 +47,6 @@ public class ResendClient implements ChannelProvider {
 				.build();
 	}
 
-	@Override
-	public Channel channel() {
-		return Channel.EMAIL;
-	}
-
 	/**
 	 * A missing key pauses dispatch (messages stay PENDING) instead of failing
 	 * them against a provider that was never called.
@@ -72,14 +67,13 @@ public class ResendClient implements ChannelProvider {
 	@Override
 	public Attempt send(Message message) {
 		Map<String, Object> payload = new LinkedHashMap<>();
-		payload.put("from", message.getSender());
+		payload.put("from", message.getFromAddress());
 		payload.put("to", List.of(message.getRecipient()));
-		payload.put("subject", message.payloadText("subject"));
-		payload.put("html", message.payloadText("html"));
-		payload.put("text", message.payloadText("text"));
-		String replyTo = message.payloadText("replyTo");
-		if (replyTo != null) {
-			payload.put("reply_to", replyTo);
+		payload.put("subject", message.getSubject());
+		payload.put("html", message.getHtmlBody());
+		payload.put("text", message.getTextBody());
+		if (message.getReplyTo() != null) {
+			payload.put("reply_to", message.getReplyTo());
 		}
 
 		Outcome outcome;
