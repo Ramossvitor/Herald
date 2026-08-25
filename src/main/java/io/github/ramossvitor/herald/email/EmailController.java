@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import io.github.ramossvitor.herald.common.NotFoundException;
+import io.github.ramossvitor.herald.outbox.DeliveryState;
 import io.github.ramossvitor.herald.outbox.Message;
 import io.github.ramossvitor.herald.outbox.MessageRepository;
 import io.github.ramossvitor.herald.outbox.MessageStatus;
@@ -48,8 +49,18 @@ public class EmailController {
 				message.getId(), message.getStatus(), submission.deduplicated(), message.getCreatedAt()));
 	}
 
+	/**
+	 * {@code status} is how far Herald got; {@code deliveryState} is what the
+	 * provider reported afterwards. They answer different questions — SENT means
+	 * handed over, DELIVERED means it arrived — and a SENT message with a
+	 * BOUNCED delivery state is the normal way a bad address looks.
+	 *
+	 * {@code deliveryState} stays null until a webhook arrives, and forever if
+	 * none is configured.
+	 */
 	public record EmailStatusResponse(UUID id, MessageStatus status, int attemptCount, String providerMessageId,
-			String lastError, Instant createdAt, Instant sentAt) {
+			String lastError, Instant createdAt, Instant sentAt, DeliveryState deliveryState, String deliveryDetail,
+			Instant deliveryUpdatedAt) {
 	}
 
 	@GetMapping("/{id}")
@@ -57,6 +68,7 @@ public class EmailController {
 		Message message = messages.findByIdAndTenantId(id, principal.tenantId())
 				.orElseThrow(() -> new NotFoundException("email not found: " + id));
 		return new EmailStatusResponse(message.getId(), message.getStatus(), message.getAttemptCount(),
-				message.getProviderMessageId(), message.getLastError(), message.getCreatedAt(), message.getSentAt());
+				message.getProviderMessageId(), message.getLastError(), message.getCreatedAt(), message.getSentAt(),
+				message.getDeliveryState(), message.getDeliveryDetail(), message.getDeliveryUpdatedAt());
 	}
 }

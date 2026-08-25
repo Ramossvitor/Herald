@@ -21,6 +21,10 @@ public record HeraldProperties(
 	public record Resend(
 			@DefaultValue("https://api.resend.com") String baseUrl,
 			@DefaultValue("") String apiKey,
+			/** Svix signing secret ({@code whsec_…}) for the delivery webhook.
+			 * Empty closes the endpoint: an unverifiable event is not one to act
+			 * on, and acting on it would let anyone write the suppression list. */
+			@DefaultValue("") String webhookSecret,
 			@DefaultValue("5s") Duration connectTimeout,
 			@DefaultValue("10s") Duration readTimeout) {
 	}
