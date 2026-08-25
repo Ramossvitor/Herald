@@ -53,7 +53,8 @@ import io.github.ramossvitor.herald.outbox.OutboxWorker;
 @TestPropertySource(properties = {
 		"herald.admin-api-key=test-admin-master-key",
 		"herald.resend.api-key=re_test_fake",
-		// base64("testsecretforwebhookverification")
+		// An invented secret, base64("testsecretforwebhookverification"), so the
+		// test can sign its own requests the way the provider would.
 		"herald.resend.webhook-secret=whsec_dGVzdHNlY3JldGZvcndlYmhvb2t2ZXJpZmljYXRpb24=",
 		"herald.outbox.poll-interval=1h",
 		"herald.outbox.send-interval=0ms",
@@ -61,6 +62,8 @@ import io.github.ramossvitor.herald.outbox.OutboxWorker;
 class WebhookIntegrationTest {
 
 	private static final String ADMIN = "Bearer test-admin-master-key";
+	/** The same invented fixture as above, not a credential. The real secret is
+	 *  only ever {@code RESEND_WEBHOOK_SECRET}, and never in the repository. */
 	private static final String SECRET = "whsec_dGVzdHNlY3JldGZvcndlYmhvb2t2ZXJpZmljYXRpb24=";
 	private static final String WEBHOOK = "/v1/webhooks/resend";
 	private static final AtomicInteger SLUGS = new AtomicInteger();

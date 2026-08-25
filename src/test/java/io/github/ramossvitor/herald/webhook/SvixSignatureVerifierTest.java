@@ -19,6 +19,10 @@ import io.github.ramossvitor.herald.common.HeraldProperties;
  */
 class SvixSignatureVerifierTest {
 
+	// The vector itself, verbatim from Svix's published documentation and so
+	// nobody's credential. Secret scanners flag the whsec_ prefix on sight —
+	// Stripe signs its webhooks with the same one — but changing any of these
+	// five values to appease one would defeat the point of pinning them.
 	private static final String SECRET = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw";
 	private static final String ID = "msg_p5jXN8AQM9LWM0D4loKWxJek";
 	private static final String TIMESTAMP = "1614265330";
@@ -85,6 +89,8 @@ class SvixSignatureVerifierTest {
 
 	@Test
 	void anotherSecretDoesNotVerify() {
+		// base64("nottherightsecretatallfortesting") — invented, and invented to
+		// fail: the assertion below is that it verifies nothing.
 		SvixSignatureVerifier verifier = verifierAt(Instant.ofEpochSecond(Long.parseLong(TIMESTAMP)),
 				"whsec_bm90dGhlcmlnaHRzZWNyZXRhdGFsbGZvcnRlc3Rpbmc=");
 
